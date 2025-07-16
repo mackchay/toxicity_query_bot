@@ -113,9 +113,7 @@ def get_codellama_instruct_prompt(original_query: str, user_question: str, table
     return (
         "### Task\n"
         f"Generate a SQL query to answer [QUESTION]{user_question}[/QUESTION]\n\n"
-        "### Database Schema\n"
-        "The query will run on a database with the following schema:\n"
-        f"{table_metadata_string_DDL_statements}\n\n"
+    
         "### Answer\n"
         f"{original_query},[SQL], your explanation\n"
     )

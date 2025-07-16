@@ -112,11 +112,18 @@ def read_sql_queries_from_csv(file_path, limit=10):
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     queries = read_sql_queries_from_csv(sql_file)
     results = []
-    prompt_template = (
-        "Correct and optimize the SQL queries with explanation. "
-        "Return the answer in the format: original query, corrected query (if correction is necessary), explanation of the error (if there is one, if not, then 'the query does not require corrections and optimization').\n"
-        "SQL queries:\n{queries}"
-    )
+    if 'Instruct' in llm_name:
+        prompt_template = (
+            "<|system|>Ты эксперт по SQL. Исправь ошибки и оптимизируй запросы, объясни каждое исправление. "
+            "Верни результат в формате: оригинальный запрос; исправленный запрос; объяснение. Если исправлять не нужно, напиши 'запрос не требует исправлений и оптимизации'.<|user|>\n"
+            "SQL-запросы:\n{queries}\n<|assistant|>"
+        )
+    else:
+        prompt_template = (
+            "Correct and optimize the SQL queries with explanation. "
+            "Return the answer in the format: original query, corrected query (if correction is necessary), explanation of the error (if there is one, if not, then 'the query does not require corrections and optimization').\n"
+            "SQL queries:\n{queries}"
+        )
     prompt = prompt_template.format(queries='\n'.join(queries))
     try:
         response = generate_llm_response(prompt, llm_name, quantization=quantization)

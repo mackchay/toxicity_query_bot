@@ -69,17 +69,17 @@ async def handle_file(message: Message):
         await message.answer("Выберите следующий файл или загрузите SQL-запросы.", reply_markup=get_file_kb())
 
 @router.message(lambda message: message.text in [
-    'meta-llama/CodeLlama-7b-hf (8bit)', 'meta-llama/CodeLlama-7b-hf (4bit)',
-    'defog/sqlcoder-7b-2 (8bit)', 'defog/sqlcoder-7b-2 (4bit)',
-    'TheBloke/sqlcoder-7B-GGUF'])
+    'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
+    'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
+    'sqlcoder-7B-GGUF'])
 async def handle_llm_choice(message: Message):
     user_id = message.from_user.id
     llm_map = {
-        'meta-llama/CodeLlama-7b-hf (8bit)': ('meta-llama/CodeLlama-7b-hf', '8bit'),
-        'meta-llama/CodeLlama-7b-hf (4bit)': ('meta-llama/CodeLlama-7b-hf', '4bit'),
-        'defog/sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
-        'defog/sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
-        'TheBloke/sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None)
+        'CodeLlama-7b-hf (8bit)': ('meta-llama/CodeLlama-7b-hf', '8bit'),
+        'CodeLlama-7b-hf (4bit)': ('meta-llama/CodeLlama-7b-hf', '4bit'),
+        'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
+        'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
+        'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None)
     }
     llm, quant = llm_map[message.text]
     sql_file = user_files.get(user_id, {}).get('Загрузить SQL-запросы')

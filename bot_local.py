@@ -33,8 +33,9 @@ def get_file_kb():
 
 def get_llm_kb():
     kb = [
-        [KeyboardButton(text='meta-llama/CodeLlama-7b-hf')],
-        [KeyboardButton(text='defog/sqlcoder-7b-2')]
+        [KeyboardButton(text='meta-llama/CodeLlama-7b-hf (8bit)'), KeyboardButton(text='meta-llama/CodeLlama-7b-hf (4bit)')],
+        [KeyboardButton(text='defog/sqlcoder-7b-2 (8bit)'), KeyboardButton(text='defog/sqlcoder-7b-2 (4bit)')],
+        [KeyboardButton(text='TheBloke/sqlcoder-7B-GGUF')]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -67,16 +68,26 @@ async def handle_file(message: Message):
     else:
         await message.answer("Выберите следующий файл или загрузите SQL-запросы.", reply_markup=get_file_kb())
 
-@router.message(lambda message: message.text in ['meta-llama/CodeLlama-7b-hf', 'defog/sqlcoder-7b-2'])
+@router.message(lambda message: message.text in [
+    'meta-llama/CodeLlama-7b-hf (8bit)', 'meta-llama/CodeLlama-7b-hf (4bit)',
+    'defog/sqlcoder-7b-2 (8bit)', 'defog/sqlcoder-7b-2 (4bit)',
+    'TheBloke/sqlcoder-7B-GGUF'])
 async def handle_llm_choice(message: Message):
     user_id = message.from_user.id
-    llm = message.text
+    llm_map = {
+        'meta-llama/CodeLlama-7b-hf (8bit)': ('meta-llama/CodeLlama-7b-hf', '8bit'),
+        'meta-llama/CodeLlama-7b-hf (4bit)': ('meta-llama/CodeLlama-7b-hf', '4bit'),
+        'defog/sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
+        'defog/sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
+        'TheBloke/sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None)
+    }
+    llm, quant = llm_map[message.text]
     sql_file = user_files.get(user_id, {}).get('Загрузить SQL-запросы')
     if not sql_file:
         await message.answer("Сначала загрузите файл с SQL-запросами.", reply_markup=get_file_kb())
         return
     await message.answer(f"Model {llm} loading started. Please wait...")
-    result_csv = await process_sql_with_llm(sql_file, llm, message)
+    result_csv = await process_sql_with_llm(sql_file, llm, message, quantization=quant)
     await message.answer(f"Model {llm} loaded and processing finished.")
     with open(result_csv, 'rb') as f:
         await message.answer_document(f, caption="Результаты обработки SQL-запросов")
@@ -93,7 +104,7 @@ def read_sql_queries_from_csv(file_path, limit=10):
                 break
     return queries
 
-async def process_sql_with_llm(sql_file, llm_name, message=None):
+async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     queries = read_sql_queries_from_csv(sql_file)
     results = []
     prompt_template = (
@@ -102,9 +113,12 @@ async def process_sql_with_llm(sql_file, llm_name, message=None):
         "SQL queries:\n{queries}"
     )
     prompt = prompt_template.format(queries='\n'.join(queries))
-    # Сообщение о загрузке модели уже отправлено выше
-    response = generate_llm_response(prompt, llm_name)
-    # Сообщение об окончании загрузки отправляется выше
+    try:
+        response = generate_llm_response(prompt, llm_name, quantization=quantization)
+    except Exception as e:
+        if message:
+            await message.answer(f"Ошибка при загрузке или запуске модели: {llm_name}: {str(e)}")
+        raise
     import io
     reader = csv.reader(io.StringIO(response))
     for row in reader:

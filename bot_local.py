@@ -111,9 +111,12 @@ def read_sql_queries_from_csv(file_path, limit=10):
 
 def get_codellama_instruct_prompt(queries: list[str]) -> str:
     system_prompt = (
-        "You are an SQL expert. Correct errors and optimize the queries, explain each correction. "
-        "Return the result in the format: original query; corrected query; explanation. "
-        "If no correction is needed, write 'the query does not require corrections and optimization'."
+        "You are an expert in SQL. For each query below, correct errors and optimize the query if needed. "
+        "For every query, explain your correction. If no correction is needed, write 'the query does not require corrections and optimization'.\n"
+        "Return the result in the following format (semicolon separated):\n"
+        "original query; corrected query; explanation\n"
+        "Example:\nSELECT * FROM users; SELECT * FROM users; the query does not require corrections and optimization\n"
+        "SELECT * FROM usrs; SELECT * FROM users; typo in table name 'usrs' corrected to 'users'\n"
     )
     message = "SQL queries:\n" + "\n".join(queries)
     return f'<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{message} [/INST] </s>'

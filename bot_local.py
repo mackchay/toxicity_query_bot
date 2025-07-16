@@ -33,9 +33,9 @@ def get_file_kb():
 
 def get_llm_kb():
     kb = [
-        [KeyboardButton(text='meta-llama/CodeLlama-7b-hf (8bit)'), KeyboardButton(text='meta-llama/CodeLlama-7b-hf (4bit)')],
-        [KeyboardButton(text='defog/sqlcoder-7b-2 (8bit)'), KeyboardButton(text='defog/sqlcoder-7b-2 (4bit)')],
-        [KeyboardButton(text='TheBloke/sqlcoder-7B-GGUF')]
+        [KeyboardButton(text='CodeLlama-7b-hf (8bit)'), KeyboardButton(text='CodeLlama-7b-hf (4bit)')],
+        [KeyboardButton(text='sqlcoder-7b-2 (8bit)'), KeyboardButton(text='sqlcoder-7b-2 (4bit)')],
+        [KeyboardButton(text='sqlcoder-7B-GGUF')]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 

@@ -109,48 +109,61 @@ def read_sql_queries_from_csv(file_path, limit=10):
                 break
     return queries
 
-def get_codellama_instruct_prompt(queries: list[str]) -> str:
-    system_prompt = (
-        "You are an expert in SQL. For each query below, correct errors and optimize the query if needed. "
-        "For every query, explain your correction. If no correction is needed, write 'the query does not require corrections and optimization'.\n"
-        "Return the result in the following format (semicolon separated):\n"
-        "original query; corrected query; explanation\n"
-        "Example:\nSELECT * FROM users; SELECT * FROM users; the query does not require corrections and optimization\n"
-        "SELECT * FROM usrs; SELECT * FROM users; typo in table name 'usrs' corrected to 'users'\n"
+def get_codellama_instruct_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
+    return (
+        "### Task\n"
+        f"Generate a SQL query to answer [QUESTION]{user_question}[/QUESTION]\n\n"
+        "### Database Schema\n"
+        "The query will run on a database with the following schema:\n"
+        f"{table_metadata_string_DDL_statements}\n\n"
+        "### Answer\n"
+        "[SQL]\n"
     )
-    message = "SQL queries:\n" + "\n".join(queries)
-    return f'[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{message} [/INST] </s>'
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     queries = read_sql_queries_from_csv(sql_file)
     results = []
-    if 'Instruct' in llm_name:
-        prompt = get_codellama_instruct_prompt(queries)
+    # batch = 1
+    # Получаем схему БД (пример: user_files[user_id]['Загрузить схему БД'])
+    table_metadata_string_DDL_statements = None
+    user_question = 'Correct and optimize the SQL query, explain the correction.'
+    # Найти схему БД для текущего пользователя
+    if message:
+        user_id = message.from_user.id
+        table_metadata_string_DDL_statements = user_files.get(user_id, {}).get('Загрузить схему БД', '')
     else:
-        prompt_template = (
-            "Correct and optimize the SQL queries with explanation. "
-            "Return the answer in the format: original query, corrected query (if correction is necessary), explanation of the error (if there is one, if not, then 'the query does not require corrections and optimization').\n"
-            "SQL queries:\n{queries}"
-        )
-        prompt = prompt_template.format(queries='\n'.join(queries))
-    try:
-        response = generate_llm_response(prompt, llm_name, quantization=quantization)
-    except Exception as e:
-        if message:
-            await message.answer(f"Ошибка при загрузке или запуске модели: {llm_name}: {str(e)}")
-        raise
-    import io
-    reader = csv.reader(io.StringIO(response))
-    for row in reader:
-        if len(row) == 3:
-            results.append(row)
-        elif len(row) == 2:
-            results.append([row[0], row[1], ''])
-        elif len(row) == 1:
-            results.append([row[0], '', ''])
-    if not results:
-        for q in queries:
-            results.append([q, q, 'the query does not require corrections and optimization'])
+        table_metadata_string_DDL_statements = ''
+    for original_query in queries:
+        if 'Instruct' in llm_name:
+            prompt = get_codellama_instruct_prompt(
+                original_query,
+                user_question,
+                table_metadata_string_DDL_statements
+            )
+        else:
+            prompt_template = (
+                "Correct and optimize the SQL queries with explanation. "
+                "Return the answer in the format: original query, corrected query (if correction is necessary), explanation of the error (if there is one, if not, then 'the query does not require corrections and optimization').\n"
+                "SQL queries:\n{queries}"
+            )
+            prompt = prompt_template.format(queries=original_query)
+        try:
+            response = generate_llm_response(prompt, llm_name, quantization=quantization)
+        except Exception as e:
+            if message:
+                await message.answer(f"Ошибка при загрузке или запуске модели: {llm_name}: {str(e)}")
+            raise
+        import io
+        reader = csv.reader(io.StringIO(response))
+        for row in reader:
+            if len(row) == 3:
+                results.append(row)
+            elif len(row) == 2:
+                results.append([row[0], row[1], ''])
+            elif len(row) == 1:
+                results.append([row[0], '', ''])
+        if not results:
+            results.append([original_query, original_query, 'the query does not require corrections and optimization'])
     result_csv = f"result_{os.path.basename(sql_file)}"
     with open(result_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)

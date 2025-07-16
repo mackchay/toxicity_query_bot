@@ -117,7 +117,7 @@ def get_codellama_instruct_prompt(original_query: str, user_question: str, table
         "The query will run on a database with the following schema:\n"
         f"{table_metadata_string_DDL_statements}\n\n"
         "### Answer\n"
-        "[SQL]\n"
+        f"{original_query},[SQL], your explanation\n"
     )
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
@@ -134,7 +134,7 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
     else:
         table_metadata_string_DDL_statements = ''
     for original_query in queries:
-        if 'Instruct' in llm_name:
+        if 'Instruct' or 'sqlcoder' in llm_name:
             prompt = get_codellama_instruct_prompt(
                 original_query,
                 user_question,

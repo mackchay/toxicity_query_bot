@@ -1,12 +1,12 @@
 import logging
 import csv
 import os
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command
 from aiogram import Router
-from aiogram.types import Message, Document
+from aiogram.types import Message
 import asyncio
 from dotenv import load_dotenv
 

@@ -34,7 +34,7 @@ def get_file_kb():
 def get_llm_kb():
     kb = [
         [KeyboardButton(text='CodeLlama-7b-hf (8bit)'), KeyboardButton(text='CodeLlama-7b-hf (4bit)')],
-        [KeyboardButton(text='CodeLlama-7b-Instruct-hf')],
+        [KeyboardButton(text='CodeLlama-7b-Instruct-hf'), KeyboardButton(text='CodeLlama-7b-Instruct-GGUF')],
         [KeyboardButton(text='sqlcoder-7b-2 (8bit)'), KeyboardButton(text='sqlcoder-7b-2 (4bit)')],
         [KeyboardButton(text='sqlcoder-7B-GGUF')],
         [KeyboardButton(text='CodeLlama-13B-GGUF')]
@@ -71,7 +71,7 @@ async def handle_file(message: Message):
 
 @router.message(lambda message: message.text in [
     'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
-    'CodeLlama-7b-Instruct-hf',
+    'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
     'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
     'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF'])
 async def handle_llm_choice(message: Message):
@@ -80,6 +80,7 @@ async def handle_llm_choice(message: Message):
         'CodeLlama-7b-hf (8bit)': ('codellama/CodeLlama-7b-hf', '8bit'),
         'CodeLlama-7b-hf (4bit)': ('codellama/CodeLlama-7b-hf', '4bit'),
         'CodeLlama-7b-Instruct-hf': ('codellama/CodeLlama-7b-Instruct-hf', None),
+        'CodeLlama-7b-Instruct-GGUF': ('TheBloke/CodeLlama-7B-Instruct-GGUF', None),
         'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
         'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
         'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),

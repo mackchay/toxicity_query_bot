@@ -2,7 +2,7 @@ import logging
 import csv
 import os
 from aiogram import Bot, Dispatcher
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InputFile
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command
 from aiogram import Router
@@ -57,10 +57,9 @@ async def handle_file(message: Message):
     if not file_type:
         await message.answer("Сначала выберите тип файла.", reply_markup=get_file_kb())
         return
-    file = await bot.download(message.document)
+    file_info = await bot.get_file(message.document.file_id)
     file_path = f"{user_id}_{message.document.file_name}"
-    with open(file_path, 'wb') as f:
-        f.write(file.read())
+    await bot.download_file(file_info.file_path, file_path)
     user_files[user_id][file_type] = file_path
     await message.answer(f"Файл '{file_type}' успешно загружен.")
     if file_type == 'Загрузить SQL-запросы':
@@ -90,7 +89,7 @@ async def handle_llm_choice(message: Message):
     result_csv = await process_sql_with_llm(sql_file, llm, message, quantization=quant)
     await message.answer(f"Model {llm} loaded and processing finished.")
     with open(result_csv, 'rb') as f:
-        await message.answer_document(InputFile(f, filename=os.path.basename(result_csv)), caption="Результаты обработки SQL-запросов")
+        await message.answer_document(FSInputFile(result_csv), caption="Результаты обработки SQL-запросов")
     await message.answer("Готово! Можете загрузить новые файлы.", reply_markup=get_file_kb())
 
 def read_sql_queries_from_csv(file_path, limit=10):

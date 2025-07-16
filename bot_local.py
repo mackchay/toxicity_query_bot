@@ -101,7 +101,7 @@ async def handle_llm_choice(message: Message):
 def read_sql_queries_from_csv(file_path, limit=10):
     queries = []
     with open(file_path, newline='', encoding='utf-8') as csvfile:
-        reader = csv.reader(csvfile)
+        reader = csv.reader(csvfile, delimiter=';')
         for row in reader:
             if row:
                 queries.append(row[0])

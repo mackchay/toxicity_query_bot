@@ -50,32 +50,39 @@ def load_llm_pipeline(model_name: str, quantization: str = None):
     """
     Загружает и возвращает pipeline для указанной модели с оптимизацией памяти (8bit/4bit quantization).
     quantization: None | '8bit' | '4bit'
-    Квантизация всегда через CPU (device_map='cpu').
+    Квантизация поддерживается только на GPU. На CPU загружается обычная модель.
     """
     if model_name in _loaded_pipelines:
         return _loaded_pipelines[model_name]
 
     model_path = model_name  # Можно добавить маппинг, если нужно
-    logger.info(f"Загрузка модели {model_name} с Hugging Face с оптимизацией памяти (CPU quantization)...")
-    try:
-        import bitsandbytes
-        from transformers import BitsAndBytesConfig
-        model_kwargs = {"token": HF_TOKEN}
-        quant_config = None
-        if quantization == "8bit":
-            quant_config = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True)
-        elif quantization == "4bit":
-            quant_config = BitsAndBytesConfig(load_in_4bit=True, llm_int8_enable_fp32_cpu_offload=True)
-        if quant_config:
-            model_kwargs["quantization_config"] = quant_config
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            **model_kwargs
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-    except ImportError:
-        logger.warning("bitsandbytes не установлен, загружаем модель в обычном режиме (RAM usage будет выше)")
+    logger.info(f"Загрузка модели {model_name} с Hugging Face...")
+    if quantization in ("8bit", "4bit") and torch.cuda.is_available():
+        try:
+            import bitsandbytes
+            from transformers import BitsAndBytesConfig
+            model_kwargs = {"token": HF_TOKEN}
+            quant_config = None
+            if quantization == "8bit":
+                quant_config = BitsAndBytesConfig(load_in_8bit=True)
+            elif quantization == "4bit":
+                quant_config = BitsAndBytesConfig(load_in_4bit=True)
+            if quant_config:
+                model_kwargs["quantization_config"] = quant_config
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                **model_kwargs
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
+            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
+        except ImportError:
+            logger.warning("bitsandbytes не установлен, загружаем модель в обычном режиме (RAM usage будет выше)")
+            model = AutoModelForCausalLM.from_pretrained(model_path, token=HF_TOKEN)
+            tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
+            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+    else:
+        if quantization in ("8bit", "4bit"):
+            logger.warning("Квантизация 8bit/4bit поддерживается только на GPU. Модель будет загружена в обычном режиме на CPU.")
         model = AutoModelForCausalLM.from_pretrained(model_path, token=HF_TOKEN)
         tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)

@@ -20,6 +20,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 
 GGUF_MODEL_MAP = {
     'TheBloke/sqlcoder-7B-GGUF': os.getenv('GGUF_SQLCODER_PATH', 'local_models/sqlcoder-7b.Q4_K_M.gguf'),
+    'TheBloke/CodeLlama-13B-GGUF': os.getenv('GGUF_CODELLAMA13B_PATH', 'local_models/codellama-13b.Q4_K_M.gguf'),
 }
 
 def download_gguf_from_hf(model_name: str):
@@ -37,6 +38,21 @@ def download_gguf_from_hf(model_name: str):
         if not os.path.exists(local_path):
             print(f"Скачивание {filename} из {repo_id}...")
             # huggingface_hub уже использует tqdm, но можно явно включить прогресс
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=local_dir,
+                local_dir_use_symlinks=False
+            )
+        return local_path
+    if model_name == 'TheBloke/CodeLlama-13B-GGUF':
+        repo_id = 'TheBloke/CodeLlama-13B-GGUF'
+        filename = 'codellama-13b.Q4_K_M.gguf'
+        local_dir = 'local_models'
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, filename)
+        if not os.path.exists(local_path):
+            print(f"Скачивание {filename} из {repo_id}...")
             hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
@@ -107,10 +123,10 @@ def load_llama_cpp_model(model_name: str) -> Optional[object]:
 def generate_llm_response(prompt: str, model_name: str, quantization: str = None) -> str:
     """
     Универсальная функция для генерации ответа от выбранной LLM.
-    model_name: например, 'defog/sqlcoder-7b-2', 'meta-llama/CodeLlama-7b-hf', 'TheBloke/sqlcoder-7B-GGUF' и др.
+    model_name: например, 'defog/sqlcoder-7b-2', 'meta-llama/CodeLlama-7b-hf', 'TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF' и др.
     quantization: None | '8bit' | '4bit'
     """
-    if model_name == 'TheBloke/sqlcoder-7B-GGUF':
+    if model_name in ['TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF']:
         llm = load_llama_cpp_model(model_name)
         output = llm(prompt, max_tokens=512, stop=["\n"], echo=False)
         return output["choices"][0]["text"].strip()

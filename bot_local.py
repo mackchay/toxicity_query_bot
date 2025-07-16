@@ -35,7 +35,8 @@ def get_llm_kb():
     kb = [
         [KeyboardButton(text='CodeLlama-7b-hf (8bit)'), KeyboardButton(text='CodeLlama-7b-hf (4bit)')],
         [KeyboardButton(text='sqlcoder-7b-2 (8bit)'), KeyboardButton(text='sqlcoder-7b-2 (4bit)')],
-        [KeyboardButton(text='sqlcoder-7B-GGUF')]
+        [KeyboardButton(text='sqlcoder-7B-GGUF')],
+        [KeyboardButton(text='CodeLlama-13B-GGUF')]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -70,7 +71,7 @@ async def handle_file(message: Message):
 @router.message(lambda message: message.text in [
     'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
     'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
-    'sqlcoder-7B-GGUF'])
+    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF'])
 async def handle_llm_choice(message: Message):
     user_id = message.from_user.id
     llm_map = {
@@ -78,7 +79,8 @@ async def handle_llm_choice(message: Message):
         'CodeLlama-7b-hf (4bit)': ('meta-llama/CodeLlama-7b-hf', '4bit'),
         'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
         'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
-        'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None)
+        'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),
+        'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None)
     }
     llm, quant = llm_map[message.text]
     sql_file = user_files.get(user_id, {}).get('Загрузить SQL-запросы')

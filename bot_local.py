@@ -119,7 +119,7 @@ def get_codellama_instruct_prompt(queries: list[str]) -> str:
         "SELECT * FROM usrs; SELECT * FROM users; typo in table name 'usrs' corrected to 'users'\n"
     )
     message = "SQL queries:\n" + "\n".join(queries)
-    return f'<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{message} [/INST] </s>'
+    return f'[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{message} [/INST] </s>'
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     queries = read_sql_queries_from_csv(sql_file)

@@ -112,7 +112,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = None
     """
     if model_name == 'TheBloke/sqlcoder-7B-GGUF':
         llm = load_llama_cpp_model(model_name)
-        output = llm
+        output = llm(prompt, max_tokens=512, stop=["\n"], echo=False)
         return output["choices"][0]["text"].strip()
     else:
         llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)

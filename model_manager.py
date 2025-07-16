@@ -59,11 +59,15 @@ def load_llm_pipeline(model_name: str, quantization: str = None):
     logger.info(f"Загрузка модели {model_name} с Hugging Face с оптимизацией памяти (CPU quantization)...")
     try:
         import bitsandbytes
+        from transformers import BitsAndBytesConfig
         model_kwargs = {"token": HF_TOKEN}
+        quant_config = None
         if quantization == "8bit":
-            model_kwargs["load_in_8bit"] = True
+            quant_config = BitsAndBytesConfig(load_in_8bit=True, llm_int8_enable_fp32_cpu_offload=True)
         elif quantization == "4bit":
-            model_kwargs["load_in_4bit"] = True
+            quant_config = BitsAndBytesConfig(load_in_4bit=True, llm_int8_enable_fp32_cpu_offload=True)
+        if quant_config:
+            model_kwargs["quantization_config"] = quant_config
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             **model_kwargs

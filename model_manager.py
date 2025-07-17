@@ -244,33 +244,53 @@ def clean_model_response(response: str) -> str:
 def generate_llm_response(prompt: str, model_name: str, quantization: str = None) -> str:
     """
     Универсальная функция для генерации ответа от выбранной LLM.
-    model_name: например, 'defog/sqlcoder-7b-2', 'meta-llama/CodeLlama-7b-hf', 'TheBloke/sqlcoder-7B-GGUF'
-    quantization: None | '8bit' | '4bit'
     """
     if model_name in ['TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF',
                       'TheBloke/CodeLlama-7B-Instruct-GGUF', 'TheBloke/sqlcoder-GGUF']:
         llm = load_llama_cpp_model(model_name)
-        # Обновленные параметры для лучшего контроля генерации
-        output = llm(
-            prompt,
-            max_tokens=256,          # Уменьшаем максимальное количество токенов
-            temperature=0.3,         # Немного увеличиваем температуру для разнообразия
-            top_p=0.1,              # Уменьшаем для более консервативной генерации
-            top_k=10,               # Ограничиваем выбор токенов
-            repeat_penalty=1.2,      # Увеличиваем штраф за повторения
-            presence_penalty=0.4,    # Штраф за использование одних и тех же тем
-            frequency_penalty=0.4,   # Штраф за частое использование токенов
-            stop=["###", "--", "/*", "*/", ";"],  # Стоп-токены для SQL
-            echo=False
-        )
+        # Специальные настройки для SQLCoder
+        params = {
+            'max_tokens': 128,        # Ограничиваем длину ответа
+            'temperature': 0.1,       # Делаем генерацию более детерминированной
+            'top_p': 0.05,           # Сильно ограничиваем выбор токенов
+            'top_k': 5,              # Очень строгий выбор следующего токена
+            'repeat_penalty': 1.5,    # Сильный штраф за повторения
+            'presence_penalty': 0.5,  # Штраф за повторяющиеся темы
+            'frequency_penalty': 0.5, # Штраф за частые токены
+            'stop': ["```", "###", "--", "*/", ";\\n"],  # Стоп-токены
+            'echo': False,
+            'grammar': None,         # Отключаем специальную грамматику
+            'mirostat_mode': 2,      # Включаем mirostat для лучшего контроля
+            'mirostat_tau': 3.0,     # Целевая перплексия
+            'mirostat_eta': 0.1,     # Скорость обучения
+        }
 
+        # Для моделей не-SQLCoder используем более мягкие параметры
+        if 'sqlcoder' not in model_name.lower():
+            params.update({
+                'temperature': 0.3,
+                'top_p': 0.1,
+                'top_k': 10,
+                'repeat_penalty': 1.2,
+            })
+
+        output = llm(prompt, **params)
         raw_response = output["choices"][0]["text"].strip()
-        logger.debug(f"Raw LLM response:\n{raw_response}")  # Используем debug для сырого ответа
 
+        # Дополнительная обработка для SQLCoder
+        if 'sqlcoder' in model_name.lower():
+            # Удаляем специальные токены и маркеры
+            raw_response = raw_response.replace('[/SQL]', '')
+            raw_response = raw_response.replace('[SQL]', '')
+            # Разделяем склеенные слова
+            import re
+            raw_response = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_response)
+            raw_response = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', raw_response)
+            raw_response = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', raw_response)
+
+        logger.debug(f"Raw response from {model_name}:\n{raw_response}")
         cleaned_response = clean_model_response(raw_response)
-        if cleaned_response:
-            logger.info(f"Cleaned response:\n{cleaned_response}")  # Информационное сообщение для очищенного ответа
-
+        logger.info(f"Cleaned response:\n{cleaned_response}")
         return cleaned_response
     else:
         llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)

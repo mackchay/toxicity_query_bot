@@ -189,38 +189,22 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
             response = generate_llm_response(prompt, llm_name, quantization=quantization)
             logger.info(f"Full LLM response:\n{response}\n")
 
-            # Парсинг ответа
-            import io
-            reader = csv.reader(io.StringIO(response))
-            query_results = []
-            for row in reader:
-                if len(row) == 3:
-                    query_results.append(row)
-                elif len(row) == 2:
-                    query_results.append([row[0], row[1], ''])
-                elif len(row) == 1:
-                    query_results.append([row[0], '', ''])
-
-            if query_results:
-                results.extend(query_results)
-                logger.info(f"Parsed results: {query_results}")
-            else:
-                default_result = [original_query, original_query, 'the query does not require corrections and optimization']
-                results.append(default_result)
-                logger.info(f"No valid results parsed, using default: {default_result}")
+            # Сохраняем оригинальный запрос и полный ответ модели
+            results.append([original_query, response])
+            logger.info(f"Saved query and response for query {idx}")
 
         except Exception as e:
             error_msg = f"Error processing query with {llm_name}: {str(e)}"
             logger.error(error_msg)
             if message:
                 await message.answer(error_msg)
-            results.append([original_query, '', f'Error: {str(e)}'])
+            results.append([original_query, f'Error: {str(e)}'])
 
     # Сохраняем результаты
     result_csv = f"result_{os.path.basename(sql_file)}"
     with open(result_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['original query', 'corrected query', 'explanation'])
+        writer.writerow(['original sql', 'response'])
         writer.writerows(results)
 
     logger.info(f"Results saved to {result_csv}")

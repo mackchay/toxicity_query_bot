@@ -34,21 +34,19 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
 def get_file_kb():
-    kb = [
-        [KeyboardButton(text='Загрузить датасет')],
-        [KeyboardButton(text='Загрузить SQL-запросы')],
-        [KeyboardButton(text='Загрузить схему БД')]
-    ]
+    buttons = ['Загрузить датасет', 'Загрузить SQL-запросы', 'Загрузить схему БД']
+    kb = [[KeyboardButton(text=btn)] for btn in buttons]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def get_llm_kb():
-    kb = [
-        [KeyboardButton(text='CodeLlama-7b-hf (8bit)'), KeyboardButton(text='CodeLlama-7b-hf (4bit)')],
-        [KeyboardButton(text='CodeLlama-7b-Instruct-hf'), KeyboardButton(text='CodeLlama-7b-Instruct-GGUF')],
-        [KeyboardButton(text='sqlcoder-7b-2 (8bit)'), KeyboardButton(text='sqlcoder-7b-2 (4bit)')],
-        [KeyboardButton(text='sqlcoder-7B-GGUF'), KeyboardButton(text='sqlcoder-GGUF-Q4')],
-        [KeyboardButton(text='CodeLlama-13B-GGUF')]
+    models = [
+        ['CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)'],
+        ['CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF'],
+        ['sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)'],
+        ['sqlcoder-7B-GGUF', 'sqlcoder-GGUF-Q4'],
+        ['CodeLlama-13B-GGUF']
     ]
+    kb = [[KeyboardButton(text=btn) for btn in row] for row in models]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 user_files = {}
@@ -141,37 +139,26 @@ def read_sql_queries_from_csv(file_path, limit=10):
 
 def get_sqlcoder_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
     return (
-        "### Task: Write a SQL query to solve the following problem\n"
-        f"### Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
-        f"### Original query: {original_query}\n\n"
-        "### Instructions:\n"
-        "1. Analyze the original SQL query\n"
-        "2. Return ONLY the improved SQL query without any additional text\n"
-        "3. Do not include explanations, hints, or comments\n"
-        "4. The response should contain only the SQL query\n\n"
-        "### Response:\n"
+        "### System: You are a SQL expert. Return only the optimized SQL query without any explanations or comments.\n"
+        f"### Schema:\n{table_metadata_string_DDL_statements}\n"
+        f"### Query to optimize:\n{original_query}\n"
+        "### Response (SQL only):\n"
     )
 
 def get_codellama_base_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
     return (
-        "You are an expert SQL developer. Given the following database schema and query, help improve and optimize it.\n\n"
-        f"Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
-        f"Original Query: {original_query}\n\n"
-        f"Task: {user_question}\n\n"
-        "Improved query:"
+        f"Schema:\n{table_metadata_string_DDL_statements}\n\n"
+        f"Original SQL:\n{original_query}\n\n"
+        "Return optimized SQL query only, no comments or explanations:\n"
     )
 
 def get_codellama_instruct_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
     return (
-        "### Task\n"
-        f"Generate a SQL query to answer [QUESTION]{user_question}[/QUESTION]\n\n"
-        "### Database Schema\n"
-        "The query will run on a database with the following schema:\n"
-        f"{table_metadata_string_DDL_statements}\n\n"
-        "### Context\n"
-        f"Original query to improve: {original_query}\n\n"
-        "### Answer\n"
-        "Here is the improved SQL query with explanation:\n"
+        "### Instruction\n"
+        "Analyze and optimize the SQL query. Return only the optimized SQL without any explanations.\n\n"
+        f"### Schema\n{table_metadata_string_DDL_statements}\n\n"
+        f"### Input Query\n{original_query}\n\n"
+        "### Output SQL\n"
     )
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):

@@ -18,7 +18,17 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'None':
     raise RuntimeError('TELEGRAM_TOKEN environment variable is not set or is invalid!')
 
-logging.basicConfig(level=logging.INFO)
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('llm_responses.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
@@ -109,64 +119,111 @@ def read_sql_queries_from_csv(file_path, limit=10):
                 break
     return queries
 
+def get_sqlcoder_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
+    return (
+        "### Task: Write a SQL query to solve the following problem\n"
+        f"### Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
+        f"### Question: {user_question}\n"
+        f"### Original query: {original_query}\n"
+        "### Response: Let me analyze and improve this SQL query.\n"
+    )
+
+def get_codellama_base_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
+    return (
+        "You are an expert SQL developer. Given the following database schema and query, help improve and optimize it.\n\n"
+        f"Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
+        f"Original Query: {original_query}\n\n"
+        f"Task: {user_question}\n\n"
+        "Improved query:"
+    )
+
 def get_codellama_instruct_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
     return (
         "### Task\n"
         f"Generate a SQL query to answer [QUESTION]{user_question}[/QUESTION]\n\n"
-    
+        "### Database Schema\n"
+        "The query will run on a database with the following schema:\n"
+        f"{table_metadata_string_DDL_statements}\n\n"
+        "### Context\n"
+        f"Original query to improve: {original_query}\n\n"
         "### Answer\n"
-        f"{original_query},[SQL], your explanation\n"
+        "Here is the improved SQL query with explanation:\n"
     )
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     queries = read_sql_queries_from_csv(sql_file)
     results = []
-    # batch = 1
-    # Получаем схему БД (пример: user_files[user_id]['Загрузить схему БД'])
-    table_metadata_string_DDL_statements = None
-    user_question = 'Correct and optimize the SQL query, explain the correction.'
-    # Найти схему БД для текущего пользователя
+
+    # Читаем схему БД из файла, если он есть
+    table_metadata_string_ddl_statements = ''
     if message:
         user_id = message.from_user.id
-        table_metadata_string_DDL_statements = user_files.get(user_id, {}).get('Загрузить схему БД', '')
-    else:
-        table_metadata_string_DDL_statements = ''
-    for original_query in queries:
-        if 'Instruct' or 'sqlcoder' in llm_name:
-            prompt = get_codellama_instruct_prompt(
-                original_query,
-                user_question,
-                table_metadata_string_DDL_statements
-            )
+        schema_file = user_files.get(user_id, {}).get('Загрузить схему БД')
+        if schema_file:
+            try:
+                with open(schema_file, 'r', encoding='utf-8') as f:
+                    table_metadata_string_ddl_statements = f.read().strip()
+                logger.info(f"Loaded database schema from {schema_file}")
+            except Exception as e:
+                logger.error(f"Error reading schema file: {e}")
+
+    user_question = 'Correct and optimize the SQL query, explain the correction.'
+
+    for idx, original_query in enumerate(queries, 1):
+        logger.info(f"\nProcessing query {idx}/{len(queries)}:")
+        logger.info(f"Original query: {original_query}")
+
+        # Выбор и формирование промпта
+        if 'sqlcoder' in llm_name.lower():
+            prompt = get_sqlcoder_prompt(original_query, user_question, table_metadata_string_ddl_statements)
+        elif 'instruct' in llm_name.lower():
+            prompt = get_codellama_instruct_prompt(original_query, user_question, table_metadata_string_ddl_statements)
         else:
-            prompt_template = (
-                "Correct and optimize the SQL queries with explanation. "
-                "Return the answer in the format: original query, corrected query (if correction is necessary), explanation of the error (if there is one, if not, then 'the query does not require corrections and optimization').\n"
-                "SQL queries:\n{queries}"
-            )
-            prompt = prompt_template.format(queries=original_query)
+            prompt = get_codellama_base_prompt(original_query, user_question, table_metadata_string_ddl_statements)
+
+        logger.info(f"Generated prompt for {llm_name}:")
+        logger.info(f"{prompt}\n")
+
         try:
+            # Получаем ответ от модели
             response = generate_llm_response(prompt, llm_name, quantization=quantization)
+            logger.info(f"Full LLM response:\n{response}\n")
+
+            # Парсинг ответа
+            import io
+            reader = csv.reader(io.StringIO(response))
+            query_results = []
+            for row in reader:
+                if len(row) == 3:
+                    query_results.append(row)
+                elif len(row) == 2:
+                    query_results.append([row[0], row[1], ''])
+                elif len(row) == 1:
+                    query_results.append([row[0], '', ''])
+
+            if query_results:
+                results.extend(query_results)
+                logger.info(f"Parsed results: {query_results}")
+            else:
+                default_result = [original_query, original_query, 'the query does not require corrections and optimization']
+                results.append(default_result)
+                logger.info(f"No valid results parsed, using default: {default_result}")
+
         except Exception as e:
+            error_msg = f"Error processing query with {llm_name}: {str(e)}"
+            logger.error(error_msg)
             if message:
-                await message.answer(f"Ошибка при загрузке или запуске модели: {llm_name}: {str(e)}")
-            raise
-        import io
-        reader = csv.reader(io.StringIO(response))
-        for row in reader:
-            if len(row) == 3:
-                results.append(row)
-            elif len(row) == 2:
-                results.append([row[0], row[1], ''])
-            elif len(row) == 1:
-                results.append([row[0], '', ''])
-        if not results:
-            results.append([original_query, original_query, 'the query does not require corrections and optimization'])
+                await message.answer(error_msg)
+            results.append([original_query, '', f'Error: {str(e)}'])
+
+    # Сохраняем результаты
     result_csv = f"result_{os.path.basename(sql_file)}"
     with open(result_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['original query', 'corrected query', 'explanation'])
         writer.writerows(results)
+
+    logger.info(f"Results saved to {result_csv}")
     return result_csv
 
 async def main():

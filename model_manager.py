@@ -195,6 +195,29 @@ def load_llama_cpp_model(model_name: str) -> Optional[object]:
         _loaded_llama_cpp_models[model_name] = llm
         return llm
 
+def clean_model_response(response: str) -> str:
+    """
+    Очищает ответ модели от специальных символов и проблем с кодировкой
+    """
+    if not response:
+        return ""
+
+    # Удаляем UNK_BYTE и другие специальные последовательности
+    response = response.replace("[UNK_BYTE_0x20", " ")
+    response = response.replace("[UNK_BYTE_0x0a", "\n")
+
+    # Удаляем все оставшиеся [UNK_BYTE_ последовательности
+    import re
+    response = re.sub(r'\[UNK_BYTE_[^\]]*\]', '', response)
+
+    # Очищаем от множественных пробелов и переносов строк
+    response = re.sub(r'\s+', ' ', response)
+
+    # Удаляем бэктики, если они есть в начале или конце
+    response = response.strip('`')
+
+    return response.strip()
+
 def generate_llm_response(prompt: str, model_name: str, quantization: str = None) -> str:
     """
     Универсальная функция для генерации ответа от выбранной LLM.
@@ -204,9 +227,44 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = None
     if model_name in ['TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF',
                       'TheBloke/CodeLlama-7B-Instruct-GGUF', 'TheBloke/sqlcoder-GGUF']:
         llm = load_llama_cpp_model(model_name)
-        output = llm(prompt, max_tokens=512, stop=["\n"], echo=False)
-        return output["choices"][0]["text"].strip()
+        # Обновленные параметры генерации
+        output = llm(
+            prompt,
+            max_tokens=1024,  # Увеличиваем максимальное количество токенов
+            temperature=0.1,   # Уменьшаем температуру для более детерминированных ответов
+            top_p=0.9,        # Настраиваем top_p для лучшего качества
+            top_k=40,         # Добавляем top_k для улучшения связности текста
+            repeat_penalty=1.1,  # Штраф за повторения
+            stop=["```", "###", "\n\n"],  # Останавливаемся на маркерах конца ответа
+            echo=False,
+            frequency_penalty=0.1,  # Штраф за частое использование одних и тех же токенов
+        )
+
+        raw_response = output["choices"][0]["text"].strip()
+        logger.info(f"Сырой ответ модели:\n{raw_response}")
+
+        # Дополнительная обработка ответа
+        cleaned_response = clean_model_response(raw_response)
+
+        # Проверяем, если ответ все еще без пробелов, пробуем разбить по заглавным буквам
+        if len(cleaned_response.split()) == 1 and len(cleaned_response) > 30:
+            import re
+            cleaned_response = re.sub(r'([A-Z])', r' \1', cleaned_response).strip()
+
+        logger.info(f"Очищенный ответ модели:\n{cleaned_response}")
+        return cleaned_response
     else:
         llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)
-        result = llm_pipeline(prompt, return_full_text=False)
-        return result[0]["generated_text"] if result else ""
+        result = llm_pipeline(
+            prompt,
+            max_length=1024,
+            temperature=0.1,
+            top_p=0.9,
+            num_return_sequences=1,
+            do_sample=True
+        )
+        raw_response = result[0]["generated_text"] if result else ""
+        logger.info(f"Сырой ответ модели:\n{raw_response}")
+        cleaned_response = clean_model_response(raw_response)
+        logger.info(f"Очищенный ответ модели:\n{cleaned_response}")
+        return cleaned_response

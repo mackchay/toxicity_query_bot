@@ -46,7 +46,7 @@ def get_llm_kb():
         [KeyboardButton(text='CodeLlama-7b-hf (8bit)'), KeyboardButton(text='CodeLlama-7b-hf (4bit)')],
         [KeyboardButton(text='CodeLlama-7b-Instruct-hf'), KeyboardButton(text='CodeLlama-7b-Instruct-GGUF')],
         [KeyboardButton(text='sqlcoder-7b-2 (8bit)'), KeyboardButton(text='sqlcoder-7b-2 (4bit)')],
-        [KeyboardButton(text='sqlcoder-7B-GGUF')],
+        [KeyboardButton(text='sqlcoder-7B-GGUF'), KeyboardButton(text='sqlcoder-GGUF-Q4')],
         [KeyboardButton(text='CodeLlama-13B-GGUF')]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -83,7 +83,7 @@ async def handle_file(message: Message):
     'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
     'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
     'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
-    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF'])
+    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4'])
 async def handle_llm_choice(message: Message):
     user_id = message.from_user.id
     llm_map = {
@@ -94,18 +94,38 @@ async def handle_llm_choice(message: Message):
         'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
         'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
         'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),
+        'sqlcoder-GGUF-Q4': ('TheBloke/sqlcoder-GGUF', None),
         'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None)
     }
-    llm, quant = llm_map[message.text]
+
+    # Получаем модель и квантизацию из маппинга
+    model_info = llm_map.get(message.text)
+    if not model_info:
+        await message.answer("Неизвестная модель")
+        return
+
+    model_name, quantization = model_info
     sql_file = user_files.get(user_id, {}).get('Загрузить SQL-запросы')
+
     if not sql_file:
         await message.answer("Сначала загрузите файл с SQL-запросами.", reply_markup=get_file_kb())
         return
-    await message.answer(f"Model {llm} loading started. Please wait...")
-    result_csv = await process_sql_with_llm(sql_file, llm, message, quantization=quant)
-    await message.answer(f"Model {llm} loaded and processing finished.")
-    with open(result_csv, 'rb') as f:
-        await message.answer_document(FSInputFile(result_csv), caption="Результаты обработки SQL-запросов")
+
+    await message.answer(f"Загрузка модели {model_name} начата. Пожалуйста, подождите...")
+
+    try:
+        result_csv = await process_sql_with_llm(sql_file, model_name, message, quantization=quantization)
+        await message.answer(f"Модель {model_name} загружена и обработка завершена.")
+
+        with open(result_csv, 'rb') as f:
+            await message.answer_document(
+                FSInputFile(result_csv),
+                caption="Результаты обработки SQL-запросов"
+            )
+    except Exception as e:
+        await message.answer(f"Произошла ошибка при обработке: {str(e)}")
+        return
+
     await message.answer("Готово! Можете загрузить новые файлы.", reply_markup=get_file_kb())
 
 def read_sql_queries_from_csv(file_path, limit=10):
@@ -155,10 +175,17 @@ def get_codellama_instruct_prompt(original_query: str, user_question: str, table
     )
 
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
-    queries = read_sql_queries_from_csv(sql_file)
+    try:
+        queries = read_sql_queries_from_csv(sql_file)
+        if not queries:
+            raise ValueError("SQL файл пуст или имеет неверный формат")
+    except Exception as e:
+        logger.error(f"Ошибка при чтении SQL файла {sql_file}: {str(e)}")
+        raise ValueError(f"Не удалось прочитать SQL запросы: {str(e)}")
+
     results = []
 
-    # Читаем схему БД из файла, если он есть
+    # Читаем схему БД из файла
     table_metadata_string_ddl_statements = ''
     if message:
         user_id = message.from_user.id
@@ -167,52 +194,78 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
             try:
                 with open(schema_file, 'r', encoding='utf-8') as f:
                     table_metadata_string_ddl_statements = f.read().strip()
-                logger.info(f"Loaded database schema from {schema_file}")
+                if not table_metadata_string_ddl_statements:
+                    logger.warning("Файл схемы БД пуст")
+                    await message.answer("Предупреждение: файл схемы БД пуст")
+                else:
+                    logger.info(f"Загружена схема БД из {schema_file}")
             except Exception as e:
-                logger.error(f"Error reading schema file: {e}")
+                logger.error(f"Ошибка при чтении файла схемы БД: {e}")
+                await message.answer(f"Предупреждение: не удалось прочитать схему БД: {str(e)}")
 
-    user_question = 'Correct and optimize the SQL query, explain the correction.'
+    user_question = 'Correct and optimize the SQL query.'
 
+    total_queries = len(queries)
     for idx, original_query in enumerate(queries, 1):
-        logger.info(f"\nProcessing query {idx}/{len(queries)}:")
-        logger.info(f"Original query: {original_query}")
+        if not original_query.strip():
+            logger.warning(f"Пропущен пустой запрос #{idx}")
+            continue
+
+        logger.info(f"\nОбработка запроса {idx}/{total_queries}:")
+        logger.info(f"Исходный запрос: {original_query}")
+
+        if message:
+            await message.answer(f"Обработка запроса {idx} из {total_queries}...")
 
         # Выбор и формирование промпта
-        if 'sqlcoder' in llm_name.lower():
-            prompt = get_sqlcoder_prompt(original_query, user_question, table_metadata_string_ddl_statements)
-        elif 'instruct' in llm_name.lower():
-            prompt = get_codellama_instruct_prompt(original_query, user_question, table_metadata_string_ddl_statements)
-        else:
-            prompt = get_codellama_base_prompt(original_query, user_question, table_metadata_string_ddl_statements)
-
-        logger.info(f"Generated prompt for {llm_name}:")
-        logger.info(f"{prompt}\n")
-
         try:
+            if 'sqlcoder' in llm_name.lower():
+                prompt = get_sqlcoder_prompt(original_query, user_question, table_metadata_string_ddl_statements)
+            elif 'instruct' in llm_name.lower():
+                prompt = get_codellama_instruct_prompt(original_query, user_question, table_metadata_string_ddl_statements)
+            else:
+                prompt = get_codellama_base_prompt(original_query, user_question, table_metadata_string_ddl_statements)
+
+            logger.info(f"Сгенерирован промпт для {llm_name}:")
+            logger.info(f"{prompt}\n")
+
             # Получаем ответ от модели
             response = generate_llm_response(prompt, llm_name, quantization=quantization)
-            logger.info(f"Full LLM response:\n{response}\n")
+            logger.info(f"Ответ модели:\n{response}\n")
 
-            # Сохраняем оригинальный запрос и полный ответ модели
+            # Проверяем, что ответ не пустой
+            if not response.strip():
+                logger.warning(f"Получен пустой ответ для запроса #{idx}")
+                response = "ERROR: Модель вернула пустой ответ"
+
+            # Сохраняем результат
             results.append([original_query, response])
-            logger.info(f"Saved query and response for query {idx}")
+            logger.info(f"Сохранен результат для запроса #{idx}")
 
         except Exception as e:
-            error_msg = f"Error processing query with {llm_name}: {str(e)}"
+            error_msg = f"Ошибка при обработке запроса #{idx}: {str(e)}"
             logger.error(error_msg)
             if message:
                 await message.answer(error_msg)
-            results.append([original_query, f'Error: {str(e)}'])
+            results.append([original_query, f"ERROR: {str(e)}"])
+
+    if not results:
+        raise ValueError("Не удалось обработать ни один запрос")
 
     # Сохраняем результаты
-    result_csv = f"result_{os.path.basename(sql_file)}"
-    with open(result_csv, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['original sql', 'response'])
-        writer.writerows(results)
+    try:
+        result_csv = f"result_{os.path.basename(sql_file)}"
+        with open(result_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['original sql', 'response'])
+            writer.writerows(results)
 
-    logger.info(f"Results saved to {result_csv}")
-    return result_csv
+        logger.info(f"Результаты сохранены в {result_csv}")
+        return result_csv
+    except Exception as e:
+        error_msg = f"Ошибка при сохранении результатов: {str(e)}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
 async def main():
     dp.include_router(router)

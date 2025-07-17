@@ -142,15 +142,58 @@ def load_llm_pipeline(model_name: str, quantization: str = None):
 def load_llama_cpp_model(model_name: str) -> Optional[object]:
     """
     Загружает GGUF модель через llama-cpp-python. Если файла нет, скачивает с Hugging Face.
+    Использует оптимизации для ускорения загрузки и работы модели.
     """
     if model_name in _loaded_llama_cpp_models:
         return _loaded_llama_cpp_models[model_name]
+
     model_path = GGUF_MODEL_MAP.get(model_name)
     if not model_path or not os.path.exists(model_path):
         model_path = download_gguf_from_hf(model_name)
-    llm = Llama(model_path=model_path, n_ctx=2048)
-    _loaded_llama_cpp_models[model_name] = llm
-    return llm
+
+    # Определяем оптимальные параметры для модели
+    n_ctx = 2048  # Размер контекста
+    n_threads = max(1, os.cpu_count() - 1)  # Используем все ядра процессора кроме одного
+    n_gpu_layers = 0  # По умолчанию не используем GPU
+
+    # Проверяем наличие CUDA для возможности использования GPU
+    if torch.cuda.is_available():
+        try:
+            n_gpu_layers = 1  # Можно увеличить если хватает видеопамяти
+            logger.info(f"GPU доступен, будет использовано {n_gpu_layers} слоев на GPU")
+        except Exception as e:
+            logger.warning(f"GPU обнаружен, но не может быть использован: {e}")
+            n_gpu_layers = 0
+
+    logger.info(f"Загрузка модели {model_name} с параметрами:")
+    logger.info(f"- Количество потоков: {n_threads}")
+    logger.info(f"- Размер контекста: {n_ctx}")
+    logger.info(f"- GPU слои: {n_gpu_layers}")
+
+    try:
+        llm = Llama(
+            model_path=model_path,
+            n_ctx=n_ctx,
+            n_threads=n_threads,
+            n_gpu_layers=n_gpu_layers,
+            use_mmap=True,  # Использовать memory mapping для быстрой загрузки
+            use_mlock=False,  # Не блокировать память
+            verbose=False  # Отключаем лишний вывод
+        )
+        _loaded_llama_cpp_models[model_name] = llm
+        return llm
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке модели {model_name}: {e}")
+        # Пробуем загрузить с минимальными параметрами в случае ошибки
+        llm = Llama(
+            model_path=model_path,
+            n_ctx=2048,
+            n_threads=1,
+            n_gpu_layers=0,
+            use_mmap=True
+        )
+        _loaded_llama_cpp_models[model_name] = llm
+        return llm
 
 def generate_llm_response(prompt: str, model_name: str, quantization: str = None) -> str:
     """

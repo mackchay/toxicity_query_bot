@@ -123,9 +123,13 @@ def get_sqlcoder_prompt(original_query: str, user_question: str, table_metadata_
     return (
         "### Task: Write a SQL query to solve the following problem\n"
         f"### Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
-        f"### Question: {user_question}\n"
-        f"### Original query: {original_query}\n"
-        "### Response: Let me analyze and improve this SQL query.\n"
+        f"### Original query: {original_query}\n\n"
+        "### Instructions:\n"
+        "1. Analyze the original SQL query\n"
+        "2. Return ONLY the improved SQL query without any additional text\n"
+        "3. Do not include explanations, hints, or comments\n"
+        "4. The response should contain only the SQL query\n\n"
+        "### Response:\n"
     )
 
 def get_codellama_base_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:

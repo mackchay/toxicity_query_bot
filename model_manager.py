@@ -26,6 +26,7 @@ GGUF_MODEL_MAP = {
     'TheBloke/CodeLlama-7B-Instruct-GGUF': os.getenv('GGUF_CODELLAMA7B_INSTRUCT_PATH', 'local_models/codellama-7b-instruct.Q4_K_M.gguf'),
     'TheBloke/sqlcoder-GGUF': os.getenv('GGUF_SQLCODER_Q4_PATH', 'local_models/sqlcoder.Q4_K_M.gguf'),
     'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF': os.getenv('GGUF_MAZIYARPANAHI_SQLCODER_PATH', 'local_models/sqlcoder-7b-mistral-instruct.Q4_K_M.gguf'),
+    'TheBloke/Amethyst-13B-Mistral-GGUF': os.getenv('GGUF_AMETHYST13B_PATH', 'local_models/amethyst-13b-mistral.Q4_K_M.gguf'),
 }
 
 def download_gguf_from_hf(model_name: str):
@@ -97,6 +98,21 @@ def download_gguf_from_hf(model_name: str):
     if model_name == 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF':
         repo_id = 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
         filename = 'sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp.Q4_K_M.gguf'
+        local_dir = 'local_models'
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, filename)
+        if not os.path.exists(local_path):
+            print(f"Скачивание {filename} из {repo_id}...")
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=local_dir,
+                local_dir_use_symlinks=False
+            )
+        return local_path
+    if model_name == 'TheBloke/Amethyst-13B-Mistral-GGUF':
+        repo_id = 'TheBloke/Amethyst-13B-Mistral-GGUF'
+        filename = 'amethyst-13b-mistral.Q4_K_M.gguf'
         local_dir = 'local_models'
         os.makedirs(local_dir, exist_ok=True)
         local_path = os.path.join(local_dir, filename)
@@ -273,7 +289,8 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         'TheBloke/CodeLlama-13B-GGUF',
         'TheBloke/CodeLlama-7B-Instruct-GGUF',
         'TheBloke/sqlcoder-GGUF',
-        'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
+        'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF',
+        'TheBloke/Amethyst-13B-Mistral-GGUF'
     ]:
         # llama-cpp
         llm_obj = load_llama_cpp_model(model_name)
@@ -331,6 +348,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         return cleaned_response
     else:
         # transformers
+        # kanxxyc/Mistral-7B-SQLTuned поддерживается через transformers
         llm_pipeline = load_llm_pipeline(model_name, quantization=quantization or '8bit')
         result = llm_pipeline(
             prompt,

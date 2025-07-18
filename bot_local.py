@@ -40,11 +40,12 @@ def get_file_kb():
 
 def get_llm_kb():
     models = [
-        ['CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)'],
+        # ['CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)'],  # Удалено
         ['CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF'],
-        ['sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)'],
+        # ['sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)'],  # Удалено
         ['sqlcoder-7B-GGUF', 'sqlcoder-GGUF-Q4'],
-        ['CodeLlama-13B-GGUF', 'sqlcoder-7B-MaziyarPanahi-GGUF']
+        ['CodeLlama-13B-GGUF', 'sqlcoder-7B-MaziyarPanahi-GGUF'],
+        ['kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF']
     ]
     kb = [[KeyboardButton(text=btn) for btn in row] for row in models]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -90,26 +91,28 @@ async def handle_file(message: Message):
         await message.answer("Выберите следующий файл или загрузите SQL-запросы.", reply_markup=get_file_kb())
 
 @router.message(lambda message: message.text in [
-    'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
+    # 'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',  # Удалено
     'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
-    'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
-    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF'])
+    # 'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',  # Удалено
+    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF', 'kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF'])
 async def handle_llm_choice(message: Message):
     if not message.from_user or not message.from_user.id:
         await message.answer("Ошибка: не удалось определить пользователя.")
         return
     user_id = message.from_user.id
     llm_map = {
-        'CodeLlama-7b-hf (8bit)': ('codellama/CodeLlama-7b-hf', '8bit'),
-        'CodeLlama-7b-hf (4bit)': ('codellama/CodeLlama-7b-hf', '4bit'),
+        # 'CodeLlama-7b-hf (8bit)': ('codellama/CodeLlama-7b-hf', '8bit'),  # Удалено
+        # 'CodeLlama-7b-hf (4bit)': ('codellama/CodeLlama-7b-hf', '4bit'),  # Удалено
         'CodeLlama-7b-Instruct-hf': ('codellama/CodeLlama-7b-Instruct-hf', None),
         'CodeLlama-7b-Instruct-GGUF': ('TheBloke/CodeLlama-7B-Instruct-GGUF', None),
-        'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),
-        'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
+        # 'sqlcoder-7b-2 (8bit)': ('defog/sqlcoder-7b-2', '8bit'),  # Удалено
+        # 'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),  # Удалено
         'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),
         'sqlcoder-GGUF-Q4': ('TheBloke/sqlcoder-GGUF', None),
         'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None),
-        'sqlcoder-7B-MaziyarPanahi-GGUF': ('MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF', None)
+        'sqlcoder-7B-MaziyarPanahi-GGUF': ('MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF', None),
+        'kanxxyc-Mistral-7B-SQLTuned': ('kanxxyc/Mistral-7B-SQLTuned', None),
+        'Amethyst-13B-Mistral-GGUF': ('TheBloke/Amethyst-13B-Mistral-GGUF', None)
     }
 
     # Получаем модель и квантизацию из маппинга

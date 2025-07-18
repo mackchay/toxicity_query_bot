@@ -96,7 +96,7 @@ def download_gguf_from_hf(model_name: str):
         return local_path
     if model_name == 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF':
         repo_id = 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
-        filename = 'sqlcoder-7b-mistral-instruct.Q4_K_M.gguf'
+        filename = 'sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp.Q4_K_M.gguf'
         local_dir = 'local_models'
         os.makedirs(local_dir, exist_ok=True)
         local_path = os.path.join(local_dir, filename)
@@ -268,8 +268,14 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
     """
     Универсальная функция для генерации ответа от выбранной LLM.
     """
-    if model_name in ['TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF',
-                      'TheBloke/CodeLlama-7B-Instruct-GGUF', 'TheBloke/sqlcoder-GGUF']:
+    if model_name in [
+        'TheBloke/sqlcoder-7B-GGUF',
+        'TheBloke/CodeLlama-13B-GGUF',
+        'TheBloke/CodeLlama-7B-Instruct-GGUF',
+        'TheBloke/sqlcoder-GGUF',
+        'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
+    ]:
+        # llama-cpp
         llm_obj = load_llama_cpp_model(model_name)
         if llm_obj is None:
             raise RuntimeError(f"Не удалось загрузить модель {model_name} (llm is None)")
@@ -324,6 +330,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         logger.info(f"Cleaned response:\n{cleaned_response}")
         return cleaned_response
     else:
+        # transformers
         llm_pipeline = load_llm_pipeline(model_name, quantization=quantization or '8bit')
         result = llm_pipeline(
             prompt,

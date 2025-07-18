@@ -300,7 +300,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         # Специальные настройки для SQLCoder
         params = {
             'max_tokens': 256,        # Ограничиваем длину ответа
-            'temperature': 0.5,       # Делаем генерацию более детерминированной
+            'temperature': 0.1,       # Делаем генерацию более детерминированной
             'top_p': 0.05,           # Сильно ограничиваем выбор токенов
             'top_k': 5,              # Очень строгий выбор следующего токена
             'repeat_penalty': 1.5,    # Сильный штраф за повторения
@@ -317,7 +317,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         # Для моделей не-SQLCoder используем более мягкие параметры
         if 'sqlcoder' not in model_name.lower():
             params.update({
-                'temperature': 0.3,
+                'temperature': 0.5,
                 'top_p': 0.1,
                 'top_k': 10,
                 'repeat_penalty': 1.2,

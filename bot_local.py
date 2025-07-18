@@ -44,7 +44,7 @@ def get_llm_kb():
         ['CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF'],
         ['sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)'],
         ['sqlcoder-7B-GGUF', 'sqlcoder-GGUF-Q4'],
-        ['CodeLlama-13B-GGUF']
+        ['CodeLlama-13B-GGUF', 'sqlcoder-7B-MaziyarPanahi-GGUF']
     ]
     kb = [[KeyboardButton(text=btn) for btn in row] for row in models]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -57,18 +57,30 @@ async def send_welcome(message: Message):
 
 @router.message(lambda message: message.text in ['Загрузить датасет', 'Загрузить SQL-запросы', 'Загрузить схему БД'])
 async def ask_file(message: Message):
+    if not message.from_user or not message.from_user.id:
+        await message.answer("Ошибка: не удалось определить пользователя.")
+        return
     user_files[message.from_user.id] = {'file_type': message.text}
     await message.answer("Пожалуйста, отправьте файл.")
 
 @router.message(lambda message: message.document is not None)
 async def handle_file(message: Message):
+    if not message.from_user or not message.from_user.id:
+        await message.answer("Ошибка: не удалось определить пользователя.")
+        return
     user_id = message.from_user.id
     file_type = user_files.get(user_id, {}).get('file_type')
     if not file_type:
         await message.answer("Сначала выберите тип файла.", reply_markup=get_file_kb())
         return
+    if not message.document or not message.document.file_id:
+        await message.answer("Ошибка: не удалось получить файл.")
+        return
     file_info = await bot.get_file(message.document.file_id)
     file_path = f"{user_id}_{message.document.file_name}"
+    if not file_info.file_path:
+        await message.answer("Ошибка: не удалось получить путь к файлу.")
+        return
     await bot.download_file(file_info.file_path, file_path)
     user_files[user_id][file_type] = file_path
     await message.answer(f"Файл '{file_type}' успешно загружен.")
@@ -81,8 +93,11 @@ async def handle_file(message: Message):
     'CodeLlama-7b-hf (8bit)', 'CodeLlama-7b-hf (4bit)',
     'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
     'sqlcoder-7b-2 (8bit)', 'sqlcoder-7b-2 (4bit)',
-    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4'])
+    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF'])
 async def handle_llm_choice(message: Message):
+    if not message.from_user or not message.from_user.id:
+        await message.answer("Ошибка: не удалось определить пользователя.")
+        return
     user_id = message.from_user.id
     llm_map = {
         'CodeLlama-7b-hf (8bit)': ('codellama/CodeLlama-7b-hf', '8bit'),
@@ -93,10 +108,14 @@ async def handle_llm_choice(message: Message):
         'sqlcoder-7b-2 (4bit)': ('defog/sqlcoder-7b-2', '4bit'),
         'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),
         'sqlcoder-GGUF-Q4': ('TheBloke/sqlcoder-GGUF', None),
-        'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None)
+        'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None),
+        'sqlcoder-7B-MaziyarPanahi-GGUF': ('MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF', None)
     }
 
     # Получаем модель и квантизацию из маппинга
+    if not message.text:
+        await message.answer("Неизвестная модель")
+        return
     model_info = llm_map.get(message.text)
     if not model_info:
         await message.answer("Неизвестная модель")
@@ -215,6 +234,8 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
 
             logger.info(f"Сгенерирован промпт для {llm_name}:")
             logger.info(f"{prompt}\n")
+            if not quantization:
+                quantization = '8bit'
 
             # Получаем ответ от модели
             response = generate_llm_response(prompt, llm_name, quantization=quantization)

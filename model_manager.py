@@ -2,9 +2,11 @@ import logging
 import os
 from typing import Optional
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.pipelines import pipeline
 import torch
 from llama_cpp import Llama
+from transformers.utils.quantization_config import BitsAndBytesConfig
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("llm_model_loader")
@@ -23,6 +25,7 @@ GGUF_MODEL_MAP = {
     'TheBloke/CodeLlama-13B-GGUF': os.getenv('GGUF_CODELLAMA13B_PATH', 'local_models/codellama-13b.Q4_K_M.gguf'),
     'TheBloke/CodeLlama-7B-Instruct-GGUF': os.getenv('GGUF_CODELLAMA7B_INSTRUCT_PATH', 'local_models/codellama-7b-instruct.Q4_K_M.gguf'),
     'TheBloke/sqlcoder-GGUF': os.getenv('GGUF_SQLCODER_Q4_PATH', 'local_models/sqlcoder.Q4_K_M.gguf'),
+    'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF': os.getenv('GGUF_MAZIYARPANAHI_SQLCODER_PATH', 'local_models/sqlcoder-7b-mistral-instruct.Q4_K_M.gguf'),
 }
 
 def download_gguf_from_hf(model_name: str):
@@ -30,7 +33,6 @@ def download_gguf_from_hf(model_name: str):
     Скачивает GGUF-файл с Hugging Face, если его нет локально, с прогресс-баром.
     """
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.utils import tqdm
     if model_name == 'TheBloke/sqlcoder-7B-GGUF':
         repo_id = 'TheBloke/sqlcoder-7B-GGUF'
         filename = 'sqlcoder-7b.Q4_K_M.gguf'
@@ -92,14 +94,30 @@ def download_gguf_from_hf(model_name: str):
                 local_dir_use_symlinks=False
             )
         return local_path
+    if model_name == 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF':
+        repo_id = 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
+        filename = 'sqlcoder-7b-mistral-instruct.Q4_K_M.gguf'
+        local_dir = 'local_models'
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, filename)
+        if not os.path.exists(local_path):
+            print(f"Скачивание {filename} из {repo_id}...")
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=local_dir,
+                local_dir_use_symlinks=False
+            )
+        return local_path
     raise ValueError(f"Неизвестная GGUF модель: {model_name}")
 
-def load_llm_pipeline(model_name: str, quantization: str = None):
+def load_llm_pipeline(model_name: str, quantization: str = '8bit'):
     """
     Загружает и возвращает pipeline для указанной модели с оптимизацией памяти (8bit/4bit quantization).
     quantization: None | '8bit' | '4bit'
     Квантизация поддерживается только на GPU. На CPU загружается обычная модель.
     """
+
     if model_name in _loaded_pipelines:
         return _loaded_pipelines[model_name]
 
@@ -108,7 +126,6 @@ def load_llm_pipeline(model_name: str, quantization: str = None):
     if quantization in ("8bit", "4bit") and torch.cuda.is_available():
         try:
             import bitsandbytes
-            from transformers import BitsAndBytesConfig
             model_kwargs = {"token": HF_TOKEN}
             quant_config = None
             if quantization == "8bit":
@@ -116,11 +133,16 @@ def load_llm_pipeline(model_name: str, quantization: str = None):
             elif quantization == "4bit":
                 quant_config = BitsAndBytesConfig(load_in_4bit=True)
             if quant_config:
-                model_kwargs["quantization_config"] = quant_config
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                **model_kwargs
-            )
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    quantization_config=quant_config,
+                    **model_kwargs
+                )
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    **model_kwargs
+                )
             tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
             pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
         except ImportError:
@@ -153,7 +175,8 @@ def load_llama_cpp_model(model_name: str) -> Optional[object]:
 
     # Определяем оптимальные параметры для модели
     n_ctx = 2048  # Размер контекста
-    n_threads = max(1, os.cpu_count() - 1)  # Используем все ядра процессора кроме одного
+    cpu_count = os.cpu_count() or 2
+    n_threads = max(1, cpu_count - 1)  # Используем все ядра процессора кроме одного
     n_gpu_layers = 0  # По умолчанию не используем GPU
 
     # Проверяем наличие CUDA для возможности использования GPU
@@ -241,13 +264,16 @@ def clean_model_response(response: str) -> str:
 
     return response.strip()
 
-def generate_llm_response(prompt: str, model_name: str, quantization: str = None) -> str:
+def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bit') -> str:
     """
     Универсальная функция для генерации ответа от выбранной LLM.
     """
     if model_name in ['TheBloke/sqlcoder-7B-GGUF', 'TheBloke/CodeLlama-13B-GGUF',
                       'TheBloke/CodeLlama-7B-Instruct-GGUF', 'TheBloke/sqlcoder-GGUF']:
-        llm = load_llama_cpp_model(model_name)
+        llm_obj = load_llama_cpp_model(model_name)
+        if llm_obj is None:
+            raise RuntimeError(f"Не удалось загрузить модель {model_name} (llm is None)")
+        llm: Llama = llm_obj  # type: ignore
         # Специальные настройки для SQLCoder
         params = {
             'max_tokens': 128,        # Ограничиваем длину ответа
@@ -274,8 +300,13 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = None
                 'repeat_penalty': 1.2,
             })
 
-        output = llm(prompt, **params)
-        raw_response = output["choices"][0]["text"].strip()
+        import collections.abc
+        output = llm.create_completion(prompt=prompt, **params)
+        if isinstance(output, collections.abc.Iterator):
+            first = next(output)
+        else:
+            first = output
+        raw_response = first["choices"][0]["text"].strip()
 
         # Дополнительная обработка для SQLCoder
         if 'sqlcoder' in model_name.lower():
@@ -293,7 +324,7 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = None
         logger.info(f"Cleaned response:\n{cleaned_response}")
         return cleaned_response
     else:
-        llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)
+        llm_pipeline = load_llm_pipeline(model_name, quantization=quantization or '8bit')
         result = llm_pipeline(
             prompt,
             max_length=256,

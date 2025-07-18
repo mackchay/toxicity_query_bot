@@ -155,8 +155,8 @@ def read_sql_queries_from_csv(file_path, limit=10):
         for row in reader:
             if row:
                 queries.append(row[0])
-            if len(queries) >= limit:
-                break
+            # if len(queries) >= limit:
+            #     break
     return queries
 
 def get_sqlcoder_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:

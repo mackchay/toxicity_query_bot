@@ -299,8 +299,8 @@ def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bi
         llm: Llama = llm_obj  # type: ignore
         # Специальные настройки для SQLCoder
         params = {
-            'max_tokens': 128,        # Ограничиваем длину ответа
-            'temperature': 0.1,       # Делаем генерацию более детерминированной
+            'max_tokens': 256,        # Ограничиваем длину ответа
+            'temperature': 0.5,       # Делаем генерацию более детерминированной
             'top_p': 0.05,           # Сильно ограничиваем выбор токенов
             'top_k': 5,              # Очень строгий выбор следующего токена
             'repeat_penalty': 1.5,    # Сильный штраф за повторения

@@ -53,7 +53,8 @@ def get_llm_kb():
         ['CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF'],
         ['sqlcoder-7B-GGUF', 'sqlcoder-GGUF-Q4'],
         ['CodeLlama-13B-GGUF', 'sqlcoder-7B-MaziyarPanahi-GGUF'],
-        ['kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF']
+        ['kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF'],
+        ['Mistral-7B-Instruct-v0.2']  # Новая модель
     ]
     kb = [[KeyboardButton(text=btn) for btn in row] for row in models]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -162,7 +163,7 @@ async def handle_finetune_quant_choice(message: Message):
 
 @router.message(lambda message: message.text in [
     'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
-    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF', 'kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF'])
+    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF', 'kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF', 'Mistral-7B-Instruct-v0.2'])
 async def handle_llm_choice(message: Message):
     if not message.from_user or not message.from_user.id:
         await message.answer("Ошибка: не удалось определить пользователя.")
@@ -171,8 +172,7 @@ async def handle_llm_choice(message: Message):
     llm_map = {
         'CodeLlama-7b-Instruct-hf': ('codellama/CodeLlama-7b-Instruct-hf', None),
         'CodeLlama-7b-Instruct-GGUF': ('TheBloke/CodeLlama-7B-Instruct-GGUF', None),
-        'sqlcoder-7B-GGUF': ('TheBloke/sqlcoder-7B-GGUF', None),
-        'sqlcoder-GGUF-Q4': ('TheBloke/sqlcoder-GGUF', None),
+        'Mistral-7B-Instruct-v0.2': ('mistralai/Mistral-7B-Instruct-v0.2', None),
         'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None),
         'sqlcoder-7B-MaziyarPanahi-GGUF': ('MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF', None),
         'kanxxyc-Mistral-7B-SQLTuned': ('kanxxyc/Mistral-7B-SQLTuned', None),
@@ -237,6 +237,15 @@ def get_codellama_instruct_prompt(original_query: str, user_question: str, table
         "### Output SQL\n"
     )
 
+def get_mistral_prompt(original_query: str, table_metadata_string_DDL_statements: str) -> str:
+    return (
+        "<s>[INST] You are an expert SQL assistant. Analyze and optimize this SQL query. "
+        "Return only the corrected SQL without any additional explanations.\n\n"
+        f"Database Schema:\n{table_metadata_string_DDL_statements}\n\n"
+        f"Original SQL Query:\n{original_query}\n\n"
+        "Optimized SQL Query: [/INST]"
+    )
+
 async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=None):
     try:
         queries = read_sql_queries_from_csv(sql_file)
@@ -273,7 +282,9 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
         if message:
             await message.answer(f"Обработка запроса {idx} из {total_queries}...")
         try:
-            if 'sqlcoder' in llm_name.lower():
+            if 'mistral' in llm_name.lower():
+                prompt = get_mistral_prompt(original_query, table_metadata_string_ddl_statements)
+            elif 'sqlcoder' in llm_name.lower():
                 prompt = get_sqlcoder_prompt(original_query, '', table_metadata_string_ddl_statements)
             elif 'instruct' in llm_name.lower():
                 prompt = get_codellama_instruct_prompt(original_query, '', table_metadata_string_ddl_statements)

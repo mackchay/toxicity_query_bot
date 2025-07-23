@@ -14,7 +14,7 @@ from model_manager import generate_llm_response
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN_LLM_LOCAL')
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'None':
     raise RuntimeError('TELEGRAM_TOKEN environment variable is not set or is invalid!')
 
@@ -161,7 +161,7 @@ def read_sql_queries_from_csv(file_path, limit=10):
 
 def get_sqlcoder_prompt(original_query: str, user_question: str, table_metadata_string_DDL_statements: str) -> str:
     return (
-        "### System: You are a SQL expert. Return only the optimized SQL query without any explanations or comments.\n"
+        "### System: You are a SQL expert. Return only the fixed and optimized SQL query without any explanations or comments.\n"
         f"### Schema:\n{table_metadata_string_DDL_statements}\n"
         f"### Query to optimize:\n{original_query}\n"
         "### Response (SQL only):\n"

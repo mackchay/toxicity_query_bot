@@ -39,6 +39,7 @@ from train_llm import train_lora
 # Список HuggingFace моделей для дообучения (без GGUF)
 HF_FINETUNE_MODELS = [
     'CodeLlama-7b-Instruct-hf',
+    'Mistral-7B-Instruct-v0.2',
     # Добавьте другие HF-модели, если нужно
 ]
 
@@ -130,6 +131,7 @@ async def handle_finetune_quant_choice(message: Message):
     # Маппинг на huggingface repo
     hf_map = {
         'CodeLlama-7b-Instruct-hf': 'codellama/CodeLlama-7b-Instruct-hf',
+        'Mistral-7B-Instruct-v0.2': 'mistralai/Mistral-7B-Instruct-v0.2',
         # Добавьте другие соответствия, если нужно
     }
     base_model = hf_map.get(model_name, model_name)

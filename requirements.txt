@@ -9,3 +9,5 @@ llama-cpp-python~=0.3.0
 huggingface_hub
 chardet
 openpyxl
+peft~=0.8.0
+datasets

@@ -1,25 +1,36 @@
 import logging
 import os
-from typing import Optional
+import re
+from typing import Optional, Dict, Any
+from collections.abc import Iterator
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.pipelines import pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers.pipelines import Pipeline
+from transformers.utils.quantization_config import BitsAndBytesConfig
 import torch
 from llama_cpp import Llama
-from transformers.utils.quantization_config import BitsAndBytesConfig
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger("llm_model_loader")
 
-# Кэш для уже загруженных моделей и пайплайнов
-_loaded_models = {}
-_loaded_tokenizers = {}
-_loaded_pipelines = {}
-# Кэш для GGUF моделей
-_loaded_llama_cpp_models = {}
-
+# Константы
 HF_TOKEN = os.getenv("HF_TOKEN")
+DEFAULT_QUANTIZATION = '8bit'
+MAX_NEW_TOKENS = 256
+DEFAULT_TEMPERATURE = 0.3
 
+# Кэширование моделей
+_loaded_models: Dict[str, Any] = {}
+_loaded_tokenizers: Dict[str, Any] = {}
+_loaded_pipelines: Dict[str, Pipeline] = {}
+_loaded_llama_cpp_models: Dict[str, Llama] = {}
+
+# Конфигурация GGUF моделей
 GGUF_MODEL_MAP = {
     'TheBloke/sqlcoder-7B-GGUF': os.getenv('GGUF_SQLCODER_PATH', 'local_models/sqlcoder-7b.Q4_K_M.gguf'),
     'TheBloke/CodeLlama-13B-GGUF': os.getenv('GGUF_CODELLAMA13B_PATH', 'local_models/codellama-13b.Q4_K_M.gguf'),
@@ -29,159 +40,71 @@ GGUF_MODEL_MAP = {
     'TheBloke/Amethyst-13B-Mistral-GGUF': os.getenv('GGUF_AMETHYST13B_PATH', 'local_models/amethyst-13b-mistral.Q4_K_M.gguf'),
 }
 
-def download_gguf_from_hf(model_name: str):
-    """
-    Скачивает GGUF-файл с Hugging Face, если его нет локально, с прогресс-баром.
-    """
+def download_gguf_from_hf(model_name: str) -> str:
+    """Скачивает GGUF-файл с Hugging Face Hub."""
     from huggingface_hub import hf_hub_download
-    if model_name == 'TheBloke/sqlcoder-7B-GGUF':
-        repo_id = 'TheBloke/sqlcoder-7B-GGUF'
-        filename = 'sqlcoder-7b.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            # huggingface_hub уже использует tqdm, но можно явно включить прогресс
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    if model_name == 'TheBloke/CodeLlama-13B-GGUF':
-        repo_id = 'TheBloke/CodeLlama-13B-GGUF'
-        filename = 'codellama-13b.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    if model_name == 'TheBloke/CodeLlama-7B-Instruct-GGUF':
-        repo_id = 'TheBloke/CodeLlama-7B-Instruct-GGUF'
-        filename = 'codellama-7b-instruct.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    if model_name == 'TheBloke/sqlcoder-GGUF':
-        repo_id = 'TheBloke/sqlcoder-GGUF'
-        filename = 'sqlcoder.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    if model_name == 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF':
-        repo_id = 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'
-        filename = 'sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    if model_name == 'TheBloke/Amethyst-13B-Mistral-GGUF':
-        repo_id = 'TheBloke/Amethyst-13B-Mistral-GGUF'
-        filename = 'amethyst-13b-mistral.Q4_K_M.gguf'
-        local_dir = 'local_models'
-        os.makedirs(local_dir, exist_ok=True)
-        local_path = os.path.join(local_dir, filename)
-        if not os.path.exists(local_path):
-            print(f"Скачивание {filename} из {repo_id}...")
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
-        return local_path
-    raise ValueError(f"Неизвестная GGUF модель: {model_name}")
+    
+    model_config = {
+        'TheBloke/sqlcoder-7B-GGUF': ('sqlcoder-7b.Q4_K_M.gguf', 'TheBloke/sqlcoder-7B-GGUF'),
+        'TheBloke/CodeLlama-13B-GGUF': ('codellama-13b.Q4_K_M.gguf', 'TheBloke/CodeLlama-13B-GGUF'),
+        'TheBloke/CodeLlama-7B-Instruct-GGUF': ('codellama-7b-instruct.Q4_K_M.gguf', 'TheBloke/CodeLlama-7B-Instruct-GGUF'),
+        'TheBloke/sqlcoder-GGUF': ('sqlcoder.Q4_K_M.gguf', 'TheBloke/sqlcoder-GGUF'),
+        'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF': ('sqlcoder-7b-mistral-instruct.Q4_K_M.gguf', 'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF'),
+        'TheBloke/Amethyst-13B-Mistral-GGUF': ('amethyst-13b-mistral.Q4_K_M.gguf', 'TheBloke/Amethyst-13B-Mistral-GGUF'),
+    }
+    
+    filename, repo_id = model_config[model_name]
+    local_dir = 'local_models'
+    os.makedirs(local_dir, exist_ok=True)
+    local_path = os.path.join(local_dir, filename)
+    
+    if not os.path.exists(local_path):
+        logger.info(f"Скачивание {filename} из {repo_id}...")
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=local_dir,
+            local_dir_use_symlinks=False
+        )
+    return local_path
 
-def load_llm_pipeline(model_name: str, quantization: str = '8bit'):
-    """
-    Загружает и возвращает pipeline для указанной модели с оптимизацией памяти (8bit/4bit quantization).
-    quantization: None | '8bit' | '4bit'
-    Квантизация поддерживается только на GPU. На CPU загружается обычная модель.
-    """
-
+def load_llm_pipeline(model_name: str, quantization: str = DEFAULT_QUANTIZATION) -> Pipeline:
+    """Загружает pipeline для модели с поддержкой квантования."""
     if model_name in _loaded_pipelines:
         return _loaded_pipelines[model_name]
 
-    model_path = model_name  # Можно добавить маппинг, если нужно
-    logger.info(f"Загрузка модели {model_name} с Hugging Face...")
+    model_kwargs = {"token": HF_TOKEN}
+    quant_config = None
+
     if quantization in ("8bit", "4bit") and torch.cuda.is_available():
         try:
             import bitsandbytes
-            model_kwargs = {"token": HF_TOKEN}
-            quant_config = None
             if quantization == "8bit":
                 quant_config = BitsAndBytesConfig(load_in_8bit=True)
             elif quantization == "4bit":
                 quant_config = BitsAndBytesConfig(load_in_4bit=True)
-            if quant_config:
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    quantization_config=quant_config,
-                    **model_kwargs
-                )
-            else:
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    **model_kwargs
-                )
-            tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
-            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0)
         except ImportError:
-            logger.warning("bitsandbytes не установлен, загружаем модель в обычном режиме (RAM usage будет выше)")
-            model = AutoModelForCausalLM.from_pretrained(model_path, token=HF_TOKEN)
-            tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
-            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-    else:
-        if quantization in ("8bit", "4bit"):
-            logger.warning("Квантизация 8bit/4bit поддерживается только на GPU. Модель будет загружена в обычном режиме на CPU.")
-        model = AutoModelForCausalLM.from_pretrained(model_path, token=HF_TOKEN)
-        tokenizer = AutoTokenizer.from_pretrained(model_path, token=HF_TOKEN)
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
-    _loaded_models[model_name] = model
-    _loaded_tokenizers[model_name] = tokenizer
+            logger.warning("bitsandbytes не установлен, используется обычная загрузка")
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        quantization_config=quant_config,
+        **model_kwargs
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
+    
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        device=0 if torch.cuda.is_available() else -1
+    )
+    
     _loaded_pipelines[model_name] = pipe
     return pipe
 
-def load_llama_cpp_model(model_name: str) -> Optional[object]:
-    """
-    Загружает GGUF модель через llama-cpp-python. Если файла нет, скачивает с Hugging Face.
-    Использует оптимизации для ускорения загрузки и работы модели.
-    """
+def load_llama_cpp_model(model_name: str) -> Optional[Llama]:
+    """Загружает GGUF модель через llama-cpp-python."""
     if model_name in _loaded_llama_cpp_models:
         return _loaded_llama_cpp_models[model_name]
 
@@ -189,25 +112,9 @@ def load_llama_cpp_model(model_name: str) -> Optional[object]:
     if not model_path or not os.path.exists(model_path):
         model_path = download_gguf_from_hf(model_name)
 
-    # Определяем оптимальные параметры для модели
-    n_ctx = 2048  # Размер контекста
-    cpu_count = os.cpu_count() or 2
-    n_threads = max(1, cpu_count - 1)  # Используем все ядра процессора кроме одного
-    n_gpu_layers = 0  # По умолчанию не используем GPU
-
-    # Проверяем наличие CUDA для возможности использования GPU
-    if torch.cuda.is_available():
-        try:
-            n_gpu_layers = 1  # Можно увеличить если хватает видеопамяти
-            logger.info(f"GPU доступен, будет использовано {n_gpu_layers} слоев на GPU")
-        except Exception as e:
-            logger.warning(f"GPU обнаружен, но не может быть использован: {e}")
-            n_gpu_layers = 0
-
-    logger.info(f"Загрузка модели {model_name} с параметрами:")
-    logger.info(f"- Количество потоков: {n_threads}")
-    logger.info(f"- Размер контекста: {n_ctx}")
-    logger.info(f"- GPU слои: {n_gpu_layers}")
+    n_ctx = 2048
+    n_threads = max(1, (os.cpu_count() or 2) - 1)
+    n_gpu_layers = 1 if torch.cuda.is_available() else 0
 
     try:
         llm = Llama(
@@ -215,155 +122,112 @@ def load_llama_cpp_model(model_name: str) -> Optional[object]:
             n_ctx=n_ctx,
             n_threads=n_threads,
             n_gpu_layers=n_gpu_layers,
-            use_mmap=True,  # Использовать memory mapping для быстрой загрузки
-            use_mlock=False,  # Не блокировать память
-            verbose=False  # Отключаем лишний вывод
+            use_mmap=True,
+            verbose=False
         )
         _loaded_llama_cpp_models[model_name] = llm
         return llm
     except Exception as e:
-        logger.error(f"Ошибка при загрузке модели {model_name}: {e}")
-        # Пробуем загрузить с минимальными параметрами в случае ошибки
-        llm = Llama(
-            model_path=model_path,
-            n_ctx=2048,
-            n_threads=1,
-            n_gpu_layers=0,
-            use_mmap=True
-        )
-        _loaded_llama_cpp_models[model_name] = llm
-        return llm
+        logger.error(f"Ошибка загрузки модели {model_name}: {e}")
+        return None
 
 def clean_model_response(response: str) -> str:
-    """
-    Очищает ответ модели от специальных символов и проблем с кодировкой
-    """
+    """Очищает ответ модели от специальных символов и артефактов."""
     if not response:
         return ""
 
-    # Удаляем UNK_BYTE и другие специальные последовательности
-    response = response.replace("[UNK_BYTE_0x20", " ")
-    response = response.replace("[UNK_BYTE_0x0a", "\n")
-
-    # Удаляем все оставшиеся [UNK_BYTE_ последовательности
-    import re
+    # Удаление специальных последовательностей
     response = re.sub(r'\[UNK_BYTE_[^\]]*\]', '', response)
-
-    # Удаляем разделители ]
     response = response.replace("]", " ")
-
-    # Удаляем повторяющиеся пробелы
     response = re.sub(r'\s+', ' ', response)
+    response = response.replace('```', '').strip('`')
 
-    # Удаляем бэктики и другие специальные символы
-    response = response.replace('```', '')
-    response = response.strip('`')
-
-    # Если в тексте есть длинные последовательности без пробелов, разбиваем их
-    words = response.split()
-    cleaned_words = []
-    for word in words:
-        if len(word) > 30:  # Если слово слишком длинное
-            # Разбиваем по заглавным буквам
-            split_word = re.sub(r'([A-Z][a-z])', r' \1', word)
-            # Разбиваем по цифрам
-            split_word = re.sub(r'(\d+)', r' \1 ', split_word)
-            cleaned_words.extend(split_word.split())
-        else:
-            cleaned_words.append(word)
-
-    response = ' '.join(cleaned_words)
-
-    # Финальная очистка пробелов и пунктуации
-    response = re.sub(r'\s+', ' ', response)
-    response = re.sub(r'\s*([,.;])\s*', r'\1 ', response)
+    # Разделение склеенных слов
+    response = re.sub(r'([a-z])([A-Z])', r'\1 \2', response)
+    response = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', response)
+    response = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', response)
 
     return response.strip()
 
-def generate_llm_response(prompt: str, model_name: str, quantization: str = '8bit') -> str:
-    """
-    Универсальная функция для генерации ответа от выбранной LLM.
-    """
-    if model_name in [
-        'TheBloke/sqlcoder-7B-GGUF',
-        'TheBloke/CodeLlama-13B-GGUF',
-        'TheBloke/CodeLlama-7B-Instruct-GGUF',
-        'TheBloke/sqlcoder-GGUF',
-        'MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF',
-        'TheBloke/Amethyst-13B-Mistral-GGUF'
-    ]:
-        # llama-cpp
-        llm_obj = load_llama_cpp_model(model_name)
-        if llm_obj is None:
-            raise RuntimeError(f"Не удалось загрузить модель {model_name} (llm is None)")
-        llm: Llama = llm_obj  # type: ignore
-        # Специальные настройки для SQLCoder
-        params = {
-            'max_tokens': 256,        # Ограничиваем длину ответа
-            'temperature': 0.1,       # Делаем генерацию более детерминированной
-            'top_p': 0.05,           # Сильно ограничиваем выбор токенов
-            'top_k': 5,              # Очень строгий выбор следующего токена
-            'repeat_penalty': 1.5,    # Сильный штраф за повторения
-            'presence_penalty': 0.5,  # Штраф за повторяющиеся темы
-            'frequency_penalty': 0.5, # Штраф за частые токены
-            'stop': ["```", "###", "--", "*/", ";\\n"],  # Стоп-токены
-            'echo': False,
-            'grammar': None,         # Отключаем специальную грамматику
-            'mirostat_mode': 2,      # Включаем mirostat для лучшего контроля
-            'mirostat_tau': 3.0,     # Целевая перплексия
-            'mirostat_eta': 0.1,     # Скорость обучения
-        }
+def generate_llm_response(prompt: str, model_name: str, quantization: str = DEFAULT_QUANTIZATION) -> str:
+    """Генерирует ответ от выбранной LLM с обработкой ошибок."""
+    try:
+        if model_name in GGUF_MODEL_MAP:
+            return _generate_gguf_response(prompt, model_name)
+        return _generate_transformers_response(prompt, model_name, quantization)
+    except Exception as e:
+        logger.error(f"Ошибка генерации ответа: {e}")
+        return f"ERROR: {str(e)}"
 
-        # Для моделей не-SQLCoder используем более мягкие параметры
-        if 'sqlcoder' not in model_name.lower():
-            params.update({
-                'temperature': 0.5,
-                'top_p': 0.1,
-                'top_k': 10,
-                'repeat_penalty': 1.2,
-            })
+def _generate_gguf_response(prompt: str, model_name: str) -> str:
+    """Генерация ответа для GGUF моделей."""
+    llm = load_llama_cpp_model(model_name)
+    if not llm:
+        raise RuntimeError(f"Не удалось загрузить модель {model_name}")
+    
+    params = {
+        'max_tokens': MAX_NEW_TOKENS,
+        'temperature': 0.1,
+        'top_p': 0.05,
+        'top_k': 5,
+        'repeat_penalty': 1.5,
+        'presence_penalty': 0.5,
+        'frequency_penalty': 0.5,
+        'stop': ["```", "###", "--", "*/", ";\\n"],
+        'echo': False,
+        'grammar': None,
+        'mirostat_mode': 2,
+        'mirostat_tau': 3.0,
+        'mirostat_eta': 0.1,
+    }
 
-        import collections.abc
-        output = llm.create_completion(prompt=prompt, **params)
-        if isinstance(output, collections.abc.Iterator):
-            first = next(output)
-        else:
-            first = output
-        raw_response = first["choices"][0]["text"].strip()
+    if 'sqlcoder' not in model_name.lower():
+        params.update({
+            'temperature': 0.5,
+            'top_p': 0.1,
+            'top_k': 10,
+            'repeat_penalty': 1.2,
+        })
 
-        # Дополнительная обработка для SQLCoder
-        if 'sqlcoder' in model_name.lower():
-            # Удаляем специальные токены и маркеры
-            raw_response = raw_response.replace('[/SQL]', '')
-            raw_response = raw_response.replace('[SQL]', '')
-            # Разделяем склеенные слова
-            import re
-            raw_response = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_response)
-            raw_response = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', raw_response)
-            raw_response = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', raw_response)
-
-        logger.debug(f"Raw response from {model_name}:\n{raw_response}")
-        cleaned_response = clean_model_response(raw_response)
-        logger.info(f"Cleaned response:\n{cleaned_response}")
-        return cleaned_response
+    output = llm.create_completion(prompt=prompt, **params)
+    if isinstance(output, Iterator):
+        first = next(output)
     else:
-        # transformers
-        # kanxxyc/Mistral-7B-SQLTuned поддерживается через transformers
-        llm_pipeline = load_llm_pipeline(model_name, quantization=quantization or '8bit')
-        result = llm_pipeline(
-            prompt,
-            max_length=256,
-            temperature=0.3,
-            top_p=0.1,
-            top_k=10,
-            num_return_sequences=1,
-            do_sample=True
-        )
-        raw_response = result[0]["generated_text"] if result else ""
-        logger.debug(f"Raw pipeline response:\n{raw_response}")
+        first = output
+    raw_response = first["choices"][0]["text"].strip()
 
-        cleaned_response = clean_model_response(raw_response)
-        if cleaned_response:
-            logger.info(f"Cleaned pipeline response:\n{cleaned_response}")
+    if 'sqlcoder' in model_name.lower():
+        raw_response = raw_response.replace('[/SQL]', '')
+        raw_response = raw_response.replace('[SQL]', '')
+        raw_response = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_response)
+        raw_response = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', raw_response)
+        raw_response = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', raw_response)
 
-        return cleaned_response
+    logger.debug(f"Raw response from {model_name}:\n{raw_response}")
+    cleaned_response = clean_model_response(raw_response)
+    logger.info(f"Cleaned response:\n{cleaned_response}")
+    return cleaned_response
+
+def _generate_transformers_response(prompt: str, model_name: str, quantization: str) -> str:
+    """Генерация ответа для transformers моделей."""
+    llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)
+    
+    result = llm_pipeline(
+        prompt,
+        max_new_tokens=MAX_NEW_TOKENS,
+        temperature=DEFAULT_TEMPERATURE,
+        top_p=0.1,
+        top_k=10,
+        num_return_sequences=1,
+        do_sample=True,
+        truncation=True,
+        pad_token_id=llm_pipeline.tokenizer.eos_token_id
+    )
+    raw_response = result[0]["generated_text"] if result else ""
+    logger.debug(f"Raw pipeline response:\n{raw_response}")
+
+    cleaned_response = clean_model_response(raw_response)
+    if cleaned_response:
+        logger.info(f"Cleaned pipeline response:\n{cleaned_response}")
+
+    return cleaned_response

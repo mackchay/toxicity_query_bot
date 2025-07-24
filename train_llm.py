@@ -2,9 +2,13 @@ import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import pandas as pd
 import torch
+import logging
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 from datasets import Dataset
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger("train_lora")
 
 def make_prompt(row):
     # Если reason пустой — запрос исправен, иначе нужно исправить
@@ -47,7 +51,7 @@ def log_cuda_memory():
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024 ** 2
         reserved = torch.cuda.memory_reserved() / 1024 ** 2
-        print(f"CUDA memory allocated: {allocated:.2f} MB, reserved: {reserved:.2f} MB")
+        logger.info(f"CUDA memory allocated: {allocated:.2f} MB, reserved: {reserved:.2f} MB")
 
 def train_lora(
     xlsx_path,
@@ -66,9 +70,15 @@ def train_lora(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
+    logger.info("=== НАЧАЛО КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ ===")
     # 1. Загрузка токенизатора и модели
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-    quant_args = {"device_map": "auto", "torch_dtype": torch.float16}
+    quant_args = {
+        "device_map": "auto",
+        "torch_dtype": torch.float16,
+        "offload_folder": "offload",
+        "offload_state_dict": True
+    }
     if quantization == "8bit":
         quant_args["load_in_8bit"] = True
     elif quantization == "4bit":
@@ -79,6 +89,7 @@ def train_lora(
         **quant_args
     )
     log_cuda_memory()
+    logger.info("=== КОНЕЦ КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ ===")
     model = prepare_model_for_kbit_training(model)
     # 2. LoRA
     lora_config = LoraConfig(
@@ -108,6 +119,7 @@ def train_lora(
     )
     # 5. Trainer
     try:
+        logger.info("=== НАЧАЛО ДОOБУЧЕНИЯ ===")
         trainer = Trainer(
             model=model,
             args=training_args,
@@ -117,10 +129,11 @@ def train_lora(
         trainer.train()
         model.save_pretrained(output_dir)
         tokenizer.save_pretrained(output_dir)
-        print(f"LoRA fine-tuned model saved to {output_dir}")
+        logger.info(f"LoRA fine-tuned model saved to {output_dir}")
+        logger.info("=== КОНЕЦ ДОOБУЧЕНИЯ ===")
     except RuntimeError as e:
         if 'out of memory' in str(e).lower():
-            print("CUDA OOM! Попробуйте уменьшить batch_size, max_length, увеличить gradient_accumulation_steps или перезапустить процесс. Также убедитесь, что на GPU нет других процессов.")
+            logger.error("CUDA OOM! Попробуйте уменьшить batch_size, max_length, увеличить gradient_accumulation_steps или перезапустить процесс. Также убедитесь, что на GPU нет других процессов.")
         raise
 
 if __name__ == "__main__":

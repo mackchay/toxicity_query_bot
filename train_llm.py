@@ -70,7 +70,7 @@ def train_lora(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
-    logger.info("=== НАЧАЛО КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ ===")
+    logger.info("=== НАЧАЛО КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ (LoRA/QLoRA) ===")
     # 1. Загрузка токенизатора и модели
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     quant_args = {
@@ -79,16 +79,22 @@ def train_lora(
         "offload_folder": "offload",
         "offload_state_dict": True
     }
+    # QLoRA: load_in_4bit=True и BitsAndBytesConfig(load_in_4bit=True)
     if quantization == "8bit":
         quant_args["load_in_8bit"] = True
     elif quantization == "4bit":
         quant_args["load_in_4bit"] = True
         quant_args["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+        logger.info("Используется QLoRA (4bit quantization)")
+    else:
+        logger.info("Используется LoRA (fp16)")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         **quant_args
     )
     log_cuda_memory()
+    logger.info("Включаю gradient_checkpointing_enable() для экономии памяти!")
+    model.gradient_checkpointing_enable()
     logger.info("=== КОНЕЦ КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ ===")
     model = prepare_model_for_kbit_training(model)
     # 2. LoRA
@@ -105,7 +111,7 @@ def train_lora(
     dataset = load_dataset(xlsx_path)
     tokenized = dataset.map(lambda x: tokenize_function(x, tokenizer, max_length), batched=True)
     # 4. Аргументы тренировки
-    training_args = TrainingArguments(
+    training_args_kwargs = dict(
         per_device_train_batch_size=batch_size,
         num_train_epochs=epochs,
         learning_rate=lr,
@@ -117,6 +123,25 @@ def train_lora(
         gradient_accumulation_steps=4,
         report_to="none"
     )
+    # DeepSpeed config
+    if os.path.exists("ds_config.json"):
+        logger.info("DeepSpeed config найден, используем DeepSpeed!")
+        training_args_kwargs["deepspeed"] = "ds_config.json"
+    # FSDP config
+    try:
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            logger.info("FSDP включен (full_shard)")
+            training_args_kwargs["fsdp"] = "full_shard"
+    except Exception:
+        pass
+    # Accelerate (если установлен)
+    try:
+        import accelerate
+        logger.info("Huggingface Accelerate доступен, можно использовать accelerate launch для запуска!")
+    except ImportError:
+        pass
+    training_args = TrainingArguments(**training_args_kwargs)
     # 5. Trainer
     try:
         logger.info("=== НАЧАЛО ДОOБУЧЕНИЯ ===")

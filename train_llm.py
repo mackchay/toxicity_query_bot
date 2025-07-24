@@ -63,8 +63,8 @@ def train_lora(
     batch_size=1,
     epochs=3,
     lr=2e-4,
-    max_length=512,
-    quantization="fp16"  # "fp16", "8bit", "4bit"
+    max_length=256,
+    quantization="4bit"  # "fp16", "8bit", "4bit"
 ):
     # Очистка памяти перед загрузкой модели
     if torch.cuda.is_available():
@@ -93,6 +93,7 @@ def train_lora(
         **quant_args
     )
     log_cuda_memory()
+    model.config.use_cache = False
     logger.info("Включаю gradient_checkpointing_enable() для экономии памяти!")
     model.gradient_checkpointing_enable()
     logger.info("=== КОНЕЦ КВАНТОВАНИЯ/ЗАГРУЗКИ МОДЕЛИ ===")
@@ -120,7 +121,7 @@ def train_lora(
         logging_steps=10,
         save_steps=100,
         fp16=True if torch.cuda.is_available() else False,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=16,
         report_to="none"
     )
     # DeepSpeed config

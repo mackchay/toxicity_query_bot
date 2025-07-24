@@ -142,7 +142,8 @@ async def handle_finetune_quant_choice(message: Message):
             lambda: train_lora(
                 dataset_path,
                 base_model=base_model,
-                output_dir=f"finetuned_{user_id}_{model_name}_{quant}"
+                output_dir=f"finetuned_{user_id}_{model_name}_{quant}",
+                quantization=quant
             )
         )
         await message.answer(f"Дообучение завершено! LoRA-адаптер сохранён в папке finetuned_{user_id}_{model_name}_{quant}")

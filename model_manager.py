@@ -27,12 +27,18 @@ _loaded_models: Dict[str, Any] = {}
 _loaded_tokenizers: Dict[str, Any] = {}
 _loaded_pipelines: Dict[str, Pipeline] = {}
 
+def log_cuda_memory():
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024 ** 2
+        reserved = torch.cuda.memory_reserved() / 1024 ** 2
+        logger.info(f"CUDA memory allocated: {allocated:.2f} MB, reserved: {reserved:.2f} MB")
+
 def load_llm_pipeline(model_name: str, quantization: str = DEFAULT_QUANTIZATION) -> Pipeline:
-    """Загружает pipeline для модели с поддержкой квантования."""
+    """Загружает pipeline для модели с поддержкой квантования и оптимизацией VRAM."""
     if model_name in _loaded_pipelines:
         return _loaded_pipelines[model_name]
 
-    model_kwargs = {"token": HF_TOKEN}
+    model_kwargs = {"token": HF_TOKEN, "device_map": "auto", "torch_dtype": torch.float16}
     quant_config = None
 
     if quantization in ("8bit", "4bit") and torch.cuda.is_available():
@@ -51,14 +57,19 @@ def load_llm_pipeline(model_name: str, quantization: str = DEFAULT_QUANTIZATION)
         **model_kwargs
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name, token=HF_TOKEN)
-    
+
     pipe = pipeline(
         "text-generation",
         model=model,
         tokenizer=tokenizer,
-        device=0 if torch.cuda.is_available() else -1
+        device=0 if torch.cuda.is_available() else -1,
+        device_map="auto",
+        torch_dtype=torch.float16
     )
-    
+
+    torch.cuda.empty_cache()
+    log_cuda_memory()
+
     _loaded_pipelines[model_name] = pipe
     return pipe
 

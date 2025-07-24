@@ -50,11 +50,9 @@ def get_file_kb():
 
 def get_llm_kb():
     models = [
-        ['CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF'],
-        ['sqlcoder-7B-GGUF', 'sqlcoder-GGUF-Q4'],
-        ['CodeLlama-13B-GGUF', 'sqlcoder-7B-MaziyarPanahi-GGUF'],
-        ['kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF'],
-        ['Mistral-7B-Instruct-v0.2']  # Новая модель
+        ['CodeLlama-7b-Instruct-hf'],
+        ['Mistral-7B-Instruct-v0.2']
+        # Добавьте другие HF-модели, если нужно
     ]
     kb = [[KeyboardButton(text=btn) for btn in row] for row in models]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -136,14 +134,6 @@ async def handle_finetune_quant_choice(message: Message):
         # Добавьте другие соответствия, если нужно
     }
     base_model = hf_map.get(model_name, model_name)
-    # Квантование для train_lora
-    if quant == '4bit':
-        # Для 4bit можно использовать bitsandbytes, но train_lora по умолчанию fp16
-        # Можно добавить параметр, если train_lora поддерживает
-        pass
-    elif quant == '8bit':
-        pass
-    # fp16 — по умолчанию
     await message.answer(f"Запускается дообучение модели {model_name} с квантованием {quant}. Это может занять много времени...")
     loop = asyncio.get_event_loop()
     try:
@@ -162,8 +152,7 @@ async def handle_finetune_quant_choice(message: Message):
     finetune_state.pop(user_id, None)
 
 @router.message(lambda message: message.text in [
-    'CodeLlama-7b-Instruct-hf', 'CodeLlama-7b-Instruct-GGUF',
-    'sqlcoder-7B-GGUF', 'CodeLlama-13B-GGUF', 'sqlcoder-GGUF-Q4', 'sqlcoder-7B-MaziyarPanahi-GGUF', 'kanxxyc-Mistral-7B-SQLTuned', 'Amethyst-13B-Mistral-GGUF', 'Mistral-7B-Instruct-v0.2'])
+    'CodeLlama-7b-Instruct-hf', 'Mistral-7B-Instruct-v0.2'])
 async def handle_llm_choice(message: Message):
     if not message.from_user or not message.from_user.id:
         await message.answer("Ошибка: не удалось определить пользователя.")
@@ -171,12 +160,7 @@ async def handle_llm_choice(message: Message):
     user_id = message.from_user.id
     llm_map = {
         'CodeLlama-7b-Instruct-hf': ('codellama/CodeLlama-7b-Instruct-hf', None),
-        'CodeLlama-7b-Instruct-GGUF': ('TheBloke/CodeLlama-7B-Instruct-GGUF', None),
         'Mistral-7B-Instruct-v0.2': ('mistralai/Mistral-7B-Instruct-v0.2', None),
-        'CodeLlama-13B-GGUF': ('TheBloke/CodeLlama-13B-GGUF', None),
-        'sqlcoder-7B-MaziyarPanahi-GGUF': ('MaziyarPanahi/sqlcoder-7b-Mistral-7B-Instruct-v0.2-slerp-GGUF', None),
-        'kanxxyc-Mistral-7B-SQLTuned': ('kanxxyc/Mistral-7B-SQLTuned', None),
-        'Amethyst-13B-Mistral-GGUF': ('TheBloke/Amethyst-13B-Mistral-GGUF', None)
     }
     if not message.text:
         await message.answer("Неизвестная модель")
@@ -284,8 +268,6 @@ async def process_sql_with_llm(sql_file, llm_name, message=None, quantization=No
         try:
             if 'mistral' in llm_name.lower():
                 prompt = get_mistral_prompt(original_query, table_metadata_string_ddl_statements)
-            elif 'sqlcoder' in llm_name.lower():
-                prompt = get_sqlcoder_prompt(original_query, '', table_metadata_string_ddl_statements)
             elif 'instruct' in llm_name.lower():
                 prompt = get_codellama_instruct_prompt(original_query, '', table_metadata_string_ddl_statements)
             else:

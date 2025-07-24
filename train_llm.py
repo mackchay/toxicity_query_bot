@@ -64,7 +64,7 @@ def train_lora(
     epochs=3,
     lr=2e-4,
     max_length=256,
-    quantization="4bit"  # "fp16", "8bit", "4bit"
+    quantization="fp16"  # "fp16", "8bit", "4bit"
 ):
     # Очистка памяти перед загрузкой модели
     if torch.cuda.is_available():
@@ -83,7 +83,6 @@ def train_lora(
     if quantization == "8bit":
         quant_args["load_in_8bit"] = True
     elif quantization == "4bit":
-        quant_args["load_in_4bit"] = True
         quant_args["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
         logger.info("Используется QLoRA (4bit quantization)")
     else:

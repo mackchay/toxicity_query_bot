@@ -220,7 +220,7 @@ def _generate_transformers_response(prompt: str, model_name: str, quantization: 
         top_k=10,
         num_return_sequences=1,
         do_sample=True,
-        max_length=1024
+        max_length=1024,
         truncation=True,
         pad_token_id=llm_pipeline.tokenizer.eos_token_id
     )

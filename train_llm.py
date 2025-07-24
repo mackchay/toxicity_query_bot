@@ -1,3 +1,5 @@
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig
@@ -33,13 +35,19 @@ def load_dataset(xlsx_path):
     df['prompt'] = df.apply(make_prompt, axis=1)
     return Dataset.from_pandas(df[['prompt']])
 
-def tokenize_function(example, tokenizer, max_length=1024):
+def tokenize_function(example, tokenizer, max_length=512):
     return tokenizer(
         example["prompt"],
         truncation=True,
         max_length=max_length,
         padding="max_length"
     )
+
+def log_cuda_memory():
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024 ** 2
+        reserved = torch.cuda.memory_reserved() / 1024 ** 2
+        print(f"CUDA memory allocated: {allocated:.2f} MB, reserved: {reserved:.2f} MB")
 
 def train_lora(
     xlsx_path,
@@ -48,28 +56,29 @@ def train_lora(
     lora_r=8,
     lora_alpha=16,
     lora_dropout=0.05,
-    batch_size=2,
+    batch_size=1,
     epochs=3,
     lr=2e-4,
-    max_length=1024,
+    max_length=512,
     quantization="fp16"  # "fp16", "8bit", "4bit"
 ):
+    # Очистка памяти перед загрузкой модели
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
     # 1. Загрузка токенизатора и модели
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-    quant_args = {}
+    quant_args = {"device_map": "auto", "torch_dtype": torch.float16}
     if quantization == "8bit":
         quant_args["load_in_8bit"] = True
     elif quantization == "4bit":
         quant_args["load_in_4bit"] = True
         quant_args["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
-    else:
-        quant_args["torch_dtype"] = torch.float16
-
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        device_map="auto",
         **quant_args
     )
+    log_cuda_memory()
     model = prepare_model_for_kbit_training(model)
     # 2. LoRA
     lora_config = LoraConfig(
@@ -93,20 +102,26 @@ def train_lora(
         save_total_limit=2,
         logging_steps=10,
         save_steps=100,
-        fp16=(quantization == "fp16"),
+        fp16=True if torch.cuda.is_available() else False,
+        gradient_accumulation_steps=4,
         report_to="none"
     )
     # 5. Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized,
-        tokenizer=tokenizer
-    )
-    trainer.train()
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"LoRA fine-tuned model saved to {output_dir}")
+    try:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized,
+            tokenizer=tokenizer
+        )
+        trainer.train()
+        model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print(f"LoRA fine-tuned model saved to {output_dir}")
+    except RuntimeError as e:
+        if 'out of memory' in str(e).lower():
+            print("CUDA OOM! Попробуйте уменьшить batch_size, max_length, увеличить gradient_accumulation_steps или перезапустить процесс. Также убедитесь, что на GPU нет других процессов.")
+        raise
 
 if __name__ == "__main__":
     import argparse

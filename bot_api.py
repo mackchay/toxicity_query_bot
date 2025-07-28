@@ -94,25 +94,37 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     del USER_STATE[user_id]['awaiting']
     await update.message.reply_text(f"✅ Файл {file_type} успешно загружен!", reply_markup=main_menu_keyboard())
 
-# === Основная обработка SQL-запросов ===
+
+# === Изменения в функции process_sql_queries ===
 async def process_sql_queries(user_id: int, context: ContextTypes.DEFAULT_TYPE, message) -> None:
-    """Обработка SQL-запросов с помощью Groq API"""
     try:
         queries_path = USER_STATE[user_id]['queries']
         original_name = USER_STATE[user_id].get('queries_original_name', '')
         ext = os.path.splitext(original_name)[1].lower() if original_name else os.path.splitext(queries_path)[1].lower()
-        queries, reasons, statuses = load_queries_and_reasons(queries_path, ext)
+
+        # Получаем ДОПОЛНИТЕЛЬНО список fixables
+        queries, reasons, statuses, fixables = load_queries_and_reasons(queries_path, ext)
+
         if not queries:
             await context.bot.send_message(chat_id=user_id, text='❌ Не удалось загрузить SQL-запросы.')
             return
-        BATCH_SIZE = 1  # Только один запрос в промпте
+
+        BATCH_SIZE = 1
         results = []
         for i in range(0, len(queries), BATCH_SIZE):
             batch = queries[i:i + BATCH_SIZE]
-            batch_reasons = reasons[i:i + BATCH_SIZE] if reasons else [None] * len(batch)
-            batch_statuses = statuses[i:i + BATCH_SIZE] if statuses else [None] * len(batch)
+            batch_reasons = reasons[i:i + BATCH_SIZE]
+            batch_statuses = statuses[i:i + BATCH_SIZE]
+            batch_fixables = fixables[i:i + BATCH_SIZE]  # Новый параметр
+
             if ext == '.xlsx':
-                batch_result = await process_batch_xlsx(batch, batch_reasons, batch_statuses)
+                # Передаем fixables в обработчик
+                batch_result = await process_batch_xlsx(
+                    batch,
+                    batch_reasons,
+                    batch_statuses,
+                    batch_fixables
+                )
             else:
                 batch_result = await process_batch(batch, batch_reasons)
             results.extend(batch_result)
@@ -132,31 +144,52 @@ async def process_sql_queries(user_id: int, context: ContextTypes.DEFAULT_TYPE, 
         logger.error(f"Error processing SQL queries: {e}")
         await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка при обработке запросов: {str(e)}")
 
+
+# === Изменения в функции load_queries_and_reasons ===
 def load_queries_and_reasons(file_path, ext):
-    """Загрузка SQL-запросов, причин и статусов из файла (csv/xlsx)"""
-    queries, reasons, statuses = [], [], []
+    """Загрузка SQL-запросов, причин, статусов и флагов fixable"""
+    queries, reasons, statuses, fixables = [], [], [], []
     if ext == '.xlsx':
         df = pd.read_excel(file_path)
+
+        # Проверка обязательных столбцов
         if 'BAD_SQL' not in df.columns or 'REASON' not in df.columns:
-            return [], [], []
-        if 'STATUS' not in df.columns:
-            df['STATUS'] = None
-        # Не фильтруем строки с STATUS == SUCCES
+            return [], [], [], []
+
+        # Инициализация optional columns
+        df['STATUS'] = df.get('STATUS', None)
+        df['IS_FIXABLE'] = df.get('IS_FIXABLE', True)  # По умолчанию True
+
+        # Предобработка флагов fixable
+        df['IS_FIXABLE'] = df['IS_FIXABLE'].astype(str).str.strip().str.lower()
+        df['IS_FIXABLE'] = df['IS_FIXABLE'].map({
+            'true': True,
+            'false': False,
+            '1': True,
+            '0': False,
+            'yes': True,
+            'no': False
+        }).fillna(True)  # Неизвестные значения -> True
+
+        # Фильтрация данных
         mask_succes = df['STATUS'].astype(str).str.strip().str.lower() == 'succes'
         mask_other = ~mask_succes
-        # Для SUCCES — берем как есть
+
         df_succes = df[mask_succes]
-        # Для остальных — фильтрация как раньше
         df_other = df[mask_other]
         df_other = df_other.dropna(subset=['BAD_SQL', 'REASON'])
         df_other = df_other[df_other['BAD_SQL'].astype(str).str.strip().astype(bool)]
-        df_other = df_other[~df_other['BAD_SQL'].str.lower().isin(['nan'])]
-        # Объединяем обратно
+
+        # Объединение данных
         df_final = pd.concat([df_succes, df_other], ignore_index=True)
+
+        # Формирование списков
         queries = df_final['BAD_SQL'].astype(str).tolist()
         reasons = df_final['REASON'].astype(str).tolist()
         statuses = df_final['STATUS'].astype(str).tolist()
-    else:
+        fixables = df_final['IS_FIXABLE'].tolist()
+
+    else:  # CSV обработка
         with open(file_path, 'r', newline='', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
@@ -164,7 +197,9 @@ def load_queries_and_reasons(file_path, ext):
                     queries.append(row[0])
         reasons = [None] * len(queries)
         statuses = [None] * len(queries)
-    return queries, reasons, statuses
+        fixables = [True] * len(queries)  # Для CSV всегда True
+
+    return queries, reasons, statuses, fixables
 
 def parse_llm_response(response: str):
     # Регулярка для поиска блоков
@@ -294,14 +329,27 @@ async def llm_fix_and_optimize_async(prompt):
                     continue
             raise
 
-# Заменить вызовы llm_fix_and_optimize на await llm_fix_and_optimize_async в process_batch и process_batch_xlsx
 
-async def process_batch_xlsx(queries: list, reasons: list, statuses: list) -> list:
-    """Обработка пачки SQL-запросов из xlsx (BAD_SQL + REASON + STATUS)"""
-    import asyncio
+# === Изменения в функции process_batch_xlsx ===
+async def process_batch_xlsx(
+        queries: list,
+        reasons: list,
+        statuses: list,
+        fixables: list  # Новый параметр
+) -> list:
     results = []
-    for bad_sql, reason, status in zip(queries, reasons, statuses):
-        # Если статус SUCCES (без учета регистра), то не обрабатываем через LLM
+    for bad_sql, reason, status, fixable in zip(queries, reasons, statuses, fixables):
+        # 1. Проверка IS_FIXABLE == False
+        if not fixable:
+            results.append({
+                'BAD_SQL': bad_sql,
+                'GOOD_SQL': bad_sql,  # Копируем оригинальный запрос
+                'REASON': reason,
+                'FIX': 'Error cannot be fixed without database analysis'
+            })
+            continue
+
+        # 2. Обработка статуса SUCCES (существующая логика)
         if status is not None and str(status).strip().lower() == 'succes':
             results.append({
                 'BAD_SQL': bad_sql,
@@ -310,9 +358,15 @@ async def process_batch_xlsx(queries: list, reasons: list, statuses: list) -> li
                 'FIX': 'The query does not need to be fixed.'
             })
             continue
-        # Проверяем, что reason не пустой, не None и не nan
+
+        # 3. Обработка через LLM
         if reason is None or str(reason).strip().lower() in ('', 'nan', 'none'):
-            results.append({'BAD_SQL': bad_sql, 'GOOD_SQL': bad_sql, 'REASON': reason or '', 'FIX': ''})
+            results.append({
+                'BAD_SQL': bad_sql,
+                'GOOD_SQL': bad_sql,
+                'REASON': reason or '',
+                'FIX': ''
+            })
         else:
             prompt = build_prompt_xlsx(bad_sql, reason)
             max_attempts = 3
@@ -323,7 +377,6 @@ async def process_batch_xlsx(queries: list, reasons: list, statuses: list) -> li
                     results.append(parsed)
                     break
                 elif attempt == max_attempts - 1:
-                    # Если после 3 попыток не удалось распарсить, сохраняем как есть
                     results.append({
                         'BAD_SQL': bad_sql,
                         'GOOD_SQL': '',

@@ -15,7 +15,7 @@ def detect_encoding(file_path, sample_size=10000):
 def classify_reason(reason: str) -> str:
     reason = reason.lower()
 
-    # Сначала проверяем специфичные паттерны
+    # Специфичные паттерны
     if 'value cannot be cast to date' in reason:
         return 'CastError'
 
@@ -40,7 +40,7 @@ def classify_reason(reason: str) -> str:
     if 'encountered too many errors talking to a worker node' in reason:
         return 'TransientError'
 
-    if 'pvlos' in reason and 'java.net.SocketTimeoutException' in reason:
+    if 'pvlos' in reason and 'java.net.sockettimeoutexception' in reason:
         return 'TransientError'
 
     if 'failed connecting to hive metastore' in reason:
@@ -58,7 +58,7 @@ def classify_reason(reason: str) -> str:
     if 'unexpected parameters' in reason and 'for function' in reason:
         return 'FunctionSignatureError'
 
-    # Затем общие категории
+    # Общие категории
     if 'too many connections' in reason:
         return 'TooManyConnectionsError'
 
@@ -93,6 +93,33 @@ def classify_reason(reason: str) -> str:
     return 'Other'
 
 
+def is_valid_sql(sql_str):
+    """Проверяет, содержит ли строка допустимый SQL-запрос"""
+    if not isinstance(sql_str, str):
+        return False
+
+    sql_str = sql_str.strip().lower()
+
+    # Проверка на отсутствие SQL
+    if len(sql_str) == 0:
+        return False
+
+    # Проверка на специальные значения
+    if sql_str in ['nan', 'null', 'none', 'n/a', 'na', 'нет', 'отсутствует', 'empty']:
+        return False
+
+    # Проверка минимальной длины SQL
+    if len(sql_str) < 10:  # Минимальная длина для SQL-запроса
+        return False
+
+    # Проверка на наличие SQL-ключевых слов
+    sql_keywords = ['select', 'insert', 'update', 'delete', 'create', 'alter', 'from', 'where', 'join']
+    if any(keyword in sql_str for keyword in sql_keywords):
+        return True
+
+    return False
+
+
 def preprocess(input_xlsx, output_path):
     if not os.path.exists(input_xlsx):
         print(f'Error: Input file "{input_xlsx}" not found.')
@@ -118,12 +145,12 @@ def preprocess(input_xlsx, output_path):
     # Создаем копию исходных данных для отладки
     df_original = df.copy()
 
-    # Попробуем разные варианты имен столбцов
+    # Гибкий поиск столбцов
     reason_col = None
     bad_sql_col = None
 
     possible_reason_cols = ['REASON', 'REASON_1', 'REASON_2', 'REASON_DETAIL']
-    possible_sql_cols = ['BAD_SQL', 'OBJECT_NAME_1', 'SQL_TEXT', 'QUERY_TEXT']
+    possible_sql_cols = ['BAD_SQL', 'OBJECT_NAME_1', 'SQL_TEXT', 'QUERY_TEXT', 'QUERY']
 
     for col in possible_reason_cols:
         if col in df.columns:
@@ -145,27 +172,34 @@ def preprocess(input_xlsx, output_path):
         bad_sql_col: 'BAD_SQL'
     })
 
+    # Основные столбцы
     df = df[['STATUS', 'REASON', 'BAD_SQL']].copy()
+
+    # Преобразование в строки и очистка
     df['REASON'] = df['REASON'].astype(str).str.replace('\n', ' ', regex=False)
     df['BAD_SQL'] = df['BAD_SQL'].astype(str).str.replace('\n', ' ', regex=False)
+
+    # Фильтрация: пропускаем строки без валидного SQL
+    print(f"\nВсего строк до фильтрации: {len(df)}")
+    valid_sql_mask = df['BAD_SQL'].apply(is_valid_sql)
+    df = df[valid_sql_mask]
+    print(f"Строк после фильтрации по наличию SQL: {len(df)}")
 
     # Фильтр: исключаем строки с CanceledError
     canceled_mask = df['REASON'].str.contains('cancell?ed|query was canceled', case=False, regex=True)
     df = df[~canceled_mask]
 
-    # Сохраняем строки с успешным статусом независимо от REASON
+    # Сохраняем строки с успешным статусом
     success_mask = df['STATUS'].str.lower().isin(['success', 'succes', 'успех'])
     success_df = df[success_mask].copy()
     success_df['ERROR_CLASS'] = 'Success'
     success_df['IS_FIXABLE'] = True
 
-    # Обрабатываем остальные строки
+    # Обрабатываем ошибочные строки
     fail_df = df[~success_mask].copy()
-    fail_df = fail_df.dropna(subset=['REASON', 'BAD_SQL'])
-    fail_df = fail_df[fail_df['BAD_SQL'].astype(str).str.strip().astype(bool)]
-    fail_df = fail_df[~fail_df['BAD_SQL'].str.lower().isin(['nan', 'null', 'none'])]
+    fail_df = fail_df.dropna(subset=['REASON'])
 
-    # Классифицируем все ошибки
+    # Классифицируем ошибки
     fail_df['ERROR_CLASS'] = fail_df['REASON'].apply(classify_reason)
 
     # Определяем исправимые ошибки
@@ -191,25 +225,25 @@ def preprocess(input_xlsx, output_path):
     # Для новых/неизвестных ошибок (Other) по умолчанию считаем неисправимыми
     fail_df.loc[fail_df['ERROR_CLASS'] == 'Other', 'IS_FIXABLE'] = False
 
-    # Объединяем успешные и все неуспешные строки
+    # Объединяем успешные и ошибочные строки
     df_result = pd.concat([success_df, fail_df], ignore_index=True)
 
-    # Дополнительная фильтрация: удаляем CanceledError, если они прошли через классификатор
+    # Удаляем CanceledError
     df_result = df_result[df_result['ERROR_CLASS'] != 'CanceledError']
 
     # Сохранение результата
     if output_path.lower().endswith('.xlsx'):
         df_result.to_excel(output_path, index=False)
-        print(f'Файл успешно сохранён (Excel): {os.path.abspath(output_path)}')
+        print(f'\nФайл успешно сохранён (Excel): {os.path.abspath(output_path)}')
     else:
         df_result.to_csv(output_path, index=False, encoding='utf-8')
-        print(f'Файл успешно сохранён (CSV): {os.path.abspath(output_path)}')
+        print(f'\nФайл успешно сохранён (CSV): {os.path.abspath(output_path)}')
 
-    print('Заголовки столбцов:', df_result.columns.tolist())
+    print('\nЗаголовки столбцов:', df_result.columns.tolist())
     print('Первые 5 строк:')
     print(df_result.head(5))
 
-    # Статистика по типам ошибок
+    # Статистика
     print('\n=== Статистика по типам ошибок ===')
     error_stats = df_result['ERROR_CLASS'].value_counts()
     print(error_stats)
@@ -218,11 +252,13 @@ def preprocess(input_xlsx, output_path):
     fixable_stats = df_result['IS_FIXABLE'].value_counts()
     print(fixable_stats)
 
-    # Сохраняем лог обработки
+    # Сохраняем лог
     log_path = os.path.splitext(output_path)[0] + '_log.txt'
     with open(log_path, 'w', encoding='utf-8') as log_file:
         log_file.write("=== Статистика обработки ===\n")
-        log_file.write(f"Всего строк: {len(df_result)}\n")
+        log_file.write(f"Всего строк в исходном файле: {len(df_original)}\n")
+        log_file.write(f"Строк после фильтрации (с SQL): {len(df)}\n")
+        log_file.write(f"Строк в результате: {len(df_result)}\n")
         log_file.write(f"Успешных: {len(success_df)}\n")
         log_file.write(f"Ошибочных: {len(fail_df)}\n")
         log_file.write("\nРаспределение ошибок:\n")
@@ -230,18 +266,19 @@ def preprocess(input_xlsx, output_path):
         log_file.write("\n\nИсправимость ошибок:\n")
         log_file.write(fixable_stats.to_string())
 
-        # Сохраняем примеры ошибок для каждого класса
-        log_file.write("\n\n=== Примеры ошибок ===\n")
-        for error_class in df_result['ERROR_CLASS'].unique():
-            examples = df_result[df_result['ERROR_CLASS'] == error_class].head(3)
-            log_file.write(
-                f"\n--- {error_class} (всего: {len(df_result[df_result['ERROR_CLASS'] == error_class])}) ---\n")
-            for _, row in examples.iterrows():
-                log_file.write(f"REASON: {row['REASON']}\n")
-                log_file.write(f"SQL: {row['BAD_SQL'][:200]}...\n")
+        # Примеры пропущенных строк без SQL
+        missing_sql = df_original[~valid_sql_mask]
+        if not missing_sql.empty:
+            log_file.write("\n\n=== Пропущенные строки (без SQL) ===\n")
+            for _, row in missing_sql.head(20).iterrows():
+                log_file.write(f"STATUS: {row.get('STATUS', '')}\n")
+                log_file.write(f"REASON: {row.get(reason_col, '')[:200]}\n")
+                log_file.write(f"SQL: {row.get(bad_sql_col, '')[:200]}\n")
                 log_file.write("-" * 50 + "\n")
+            log_file.write(f"\nВсего пропущено строк без SQL: {len(missing_sql)}")
 
-    print(f'Лог обработки сохранён: {os.path.abspath(log_path)}')
+    print(f'\nЛог обработки сохранён: {os.path.abspath(log_path)}')
+    print(f'Пропущено строк без SQL: {len(df_original) - len(df)}')
 
 
 if __name__ == '__main__':

@@ -1,13 +1,29 @@
+# Математика, CSV, Excel, датасеты
 pandas~=2.3.1
-aiogram~=3.20.0
-groq~=0.30.0
-python-dotenv~=1.1.1
-transformers~=4.53.0
-torch==2.2.2
-bitsandbytes==0.46.1
-llama-cpp-python~=0.3.0
-huggingface_hub
 chardet
 openpyxl
-peft==0.8.0
 datasets
+
+# Telegram Bot
+aiogram~=3.20.0
+python-dotenv~=1.1.1
+
+# Hugging Face + модельный стек
+transformers~=4.53.0
+peft==0.8.0
+accelerate>=0.29.3
+huggingface_hub
+
+# BitsAndBytes (работает с torch >= 2.2)
+bitsandbytes==0.46.1
+
+# PyTorch (CUDA 12.1)
+torch==2.2.2
+torchaudio==2.2.2
+torchvision==0.17.2
+
+# Groq (не зависит от PyTorch, можно оставить)
+groq~=0.30.0
+
+# llama.cpp CPU/GPU поддержка (не зависит от torch)
+llama-cpp-python~=0.3.0

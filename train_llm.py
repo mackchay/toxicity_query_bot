@@ -7,7 +7,8 @@ from transformers import (
     AutoModelForCausalLM,
     TrainingArguments,
     Trainer,
-    BitsAndBytesConfig
+    BitsAndBytesConfig,
+    DataCollatorForLanguageModeling
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from datasets import Dataset
@@ -56,14 +57,15 @@ def load_dataset(xlsx_path):
 
 
 def tokenize_function(examples, tokenizer, max_length=512):
-    """Токенизирует примеры для обучения."""
-    return tokenizer(
+    tokenized = tokenizer(
         examples["prompt"],
         truncation=True,
         max_length=max_length,
-        padding="max_length",
-        return_tensors="pt"
+        padding="max_length"
     )
+    tokenized["labels"] = tokenized["input_ids"].copy()
+    return tokenized
+
 
 
 def get_bnb_config(quantization_type="4bit"):
@@ -204,12 +206,18 @@ def train_bnb_lora(
         dataloader_pin_memory=False,
     )
 
-    # Создаем тренера
+
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False
+    )
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
         tokenizer=tokenizer,
+        data_collator=data_collator
     )
 
     # Отключаем кэширование для обучения

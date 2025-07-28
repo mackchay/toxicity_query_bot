@@ -267,9 +267,9 @@ def test_model(test_data_path, model_path, model_type="base", quantization="4bit
 
     logger.info("Начинаем тестирование...")
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Тестирование"):
-        bad_sql = str(row['bad_sql']).strip()
-        expected_sql = str(row['good_sql']).strip()
-        expected_fix = str(row['fix']).strip()
+        bad_sql = str(row['BAD_SQL']).strip()
+        expected_sql = str(row['GOOD_SQL']).strip()
+        expected_fix = str(row['FIX']).strip()
 
         if not bad_sql:
             logger.warning(f"Пропущен пустой запрос в строке {idx}")

@@ -252,7 +252,7 @@ def test_model(test_data_path, model_path, model_type="base", quantization="4bit
         raise ValueError(f"Ошибка при загрузке тестовых данных: {str(e)}")
 
     # Проверяем наличие необходимых столбцов
-    required_columns = ['bad_sql', 'good_sql', 'fix']
+    required_columns = ['BAD_SQL', 'GOOD_SQL', 'FIX']
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
         raise ValueError(f"Отсутствуют обязательные столбцы: {missing_columns}")

@@ -27,3 +27,6 @@ groq~=0.30.0
 
 # llama.cpp CPU/GPU поддержка (не зависит от torch)
 llama-cpp-python~=0.3.0
+
+sqlparse
+tqdm

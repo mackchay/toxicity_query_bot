@@ -1,40 +1,17 @@
-import logging
-import os
-import re
-from typing import Optional, Dict, Any
-
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-from transformers.pipelines import Pipeline
 import torch
+import logging
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
+import os
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("llm_model_loader")
+logger = logging.getLogger(__name__)
 
-# Константы
-HF_TOKEN = os.getenv("HF_TOKEN")
-DEFAULT_QUANTIZATION = '4bit'  # теперь по умолчанию 4bit через bitsandbytes
-MAX_NEW_TOKENS = 256
-DEFAULT_TEMPERATURE = 0.3
-
-# Кэширование моделей
-_loaded_pipelines: Dict[str, Pipeline] = {}
+# Кэш для загруженных моделей
+_model_cache = {}
 
 
-def log_cuda_memory():
-    """Логирует использование CUDA памяти."""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024 ** 2
-        reserved = torch.cuda.memory_reserved() / 1024 ** 2
-        logger.info(f"CUDA memory allocated: {allocated:.2f} MB, reserved: {reserved:.2f} MB")
-
-
-def get_quantization_config(quantization: str) -> Optional[BitsAndBytesConfig]:
-    """Создает конфигурацию квантования для bitsandbytes."""
+def get_bnb_config(quantization="4bit"):
+    """Создает конфигурацию для bitsandbytes квантования"""
     if quantization == "4bit":
         return BitsAndBytesConfig(
             load_in_4bit=True,
@@ -44,172 +21,192 @@ def get_quantization_config(quantization: str) -> Optional[BitsAndBytesConfig]:
         )
     elif quantization == "8bit":
         return BitsAndBytesConfig(
-            load_in_8bit=True
+            load_in_8bit=True,
         )
-    elif quantization == "none" or quantization is None:
-        return None
     else:
-        logger.warning(f"Неизвестный тип квантования: {quantization}. Используется без квантования.")
         return None
 
 
-def load_llm_pipeline(model_name: str, quantization: str = DEFAULT_QUANTIZATION) -> Pipeline:
-    """Загружает pipeline с учётом bitsandbytes квантования."""
+def load_model_and_tokenizer(model_name, quantization="4bit"):
+    """
+    Загружает модель и токенизатор с кэшированием
+
+    Args:
+        model_name: Название модели (HuggingFace ID или локальный путь)
+        quantization: Тип квантования ("4bit", "8bit", "fp16")
+
+    Returns:
+        tuple: (model, tokenizer)
+    """
     cache_key = f"{model_name}_{quantization}"
-    if cache_key in _loaded_pipelines:
-        logger.info(f"Модель {model_name} уже загружена из кэша")
-        return _loaded_pipelines[cache_key]
 
-    logger.info(f"Загрузка модели: {model_name} с типом квантования: {quantization}")
+    if cache_key in _model_cache:
+        logger.info(f"Используем кэшированную модель: {model_name}")
+        return _model_cache[cache_key]
 
-    try:
-        # Загружаем токенизатор
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            token=HF_TOKEN,
-            use_fast=True,
-            trust_remote_code=True
-        )
+    logger.info(f"Загружаем модель: {model_name} с квантованием {quantization}")
 
-        # Устанавливаем pad_token если его нет
+    # Определяем, является ли это дообученной моделью (локальный путь с адаптерами)
+    is_finetuned = os.path.exists(model_name) and os.path.exists(os.path.join(model_name, "adapter_config.json"))
+
+    if is_finetuned:
+        # Загрузка дообученной модели с LoRA
+        import json
+        with open(os.path.join(model_name, "adapter_config.json")) as f:
+            adapter_config = json.load(f)
+        base_model_name = adapter_config.get("base_model_name_or_path", "")
+
+        if not base_model_name:
+            # Пытаемся определить по названию папки
+            if "CodeLlama" in model_name:
+                base_model_name = "codellama/CodeLlama-7b-Instruct-hf"
+            elif "Mistral" in model_name:
+                base_model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+            else:
+                raise ValueError(f"Не удалось определить базовую модель для {model_name}")
+
+        logger.info(f"Загружаем базовую модель: {base_model_name}")
+
+        # Токенизатор
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
 
-        # Получаем конфигурацию квантования
-        quantization_config = get_quantization_config(quantization)
-
-        # Загружаем модель
-        model_kwargs = {
-            "trust_remote_code": True,
-            "torch_dtype": torch.float16,
-            "token": HF_TOKEN
-        }
-
-        if quantization_config is not None:
-            model_kwargs["quantization_config"] = quantization_config
-            model_kwargs["device_map"] = "auto"
+        # Базовая модель
+        bnb_config = get_bnb_config(quantization)
+        if bnb_config:
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name,
+                quantization_config=bnb_config,
+                device_map="auto",
+                trust_remote_code=True,
+                torch_dtype=torch.float16
+            )
         else:
-            model_kwargs["device_map"] = "auto"
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name,
+                device_map="auto",
+                trust_remote_code=True,
+                torch_dtype=torch.float16
+            )
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        # Применяем LoRA адаптер
+        model = PeftModel.from_pretrained(base_model, model_name)
 
-        # Создаем pipeline
-        device = 0 if torch.cuda.is_available() and quantization == "none" else -1
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            device=device
-        )
+    else:
+        # Загрузка базовой модели
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
 
-        log_cuda_memory()
+        bnb_config = get_bnb_config(quantization)
+        if bnb_config:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=bnb_config,
+                device_map="auto",
+                trust_remote_code=True,
+                torch_dtype=torch.float16
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                device_map="auto",
+                trust_remote_code=True,
+                torch_dtype=torch.float16
+            )
 
-        _loaded_pipelines[cache_key] = pipe
-        logger.info(f"Модель {model_name} успешно загружена")
-        return pipe
+    model.eval()
+
+    # Кэшируем модель
+    _model_cache[cache_key] = (model, tokenizer)
+
+    logger.info(f"Модель {model_name} успешно загружена")
+    return model, tokenizer
+
+
+def generate_llm_response(prompt, model_name, quantization="4bit", max_new_tokens=256):
+    """
+    Генерирует ответ модели на промпт
+
+    Args:
+        prompt: Входной промпт
+        model_name: Название модели
+        quantization: Тип квантования
+        max_new_tokens: Максимальное количество новых токенов
+
+    Returns:
+        str: Сгенерированный ответ
+    """
+    try:
+        model, tokenizer = load_model_and_tokenizer(model_name, quantization)
+        device = next(model.parameters()).device
+
+        # Токенизируем промпт
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Генерируем ответ
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id
+            )
+
+        # Декодируем ответ
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Убираем исходный промпт из ответа
+        response = generated_text[len(prompt):].strip()
+
+        return response
 
     except Exception as e:
-        logger.error(f"Ошибка при загрузке модели {model_name}: {e}")
+        logger.error(f"Ошибка при генерации ответа: {str(e)}")
         raise
 
 
-def clean_model_response(response: str, original_prompt: str = "") -> str:
-    """Очищает ответ модели от артефактов и исходного промпта."""
-    if not response:
-        return ""
-
-    # Удаляем исходный промпт из ответа, если он там есть
-    if original_prompt and response.startswith(original_prompt):
-        response = response[len(original_prompt):].strip()
-
-    # Очищаем различные артефакты
-    response = re.sub(r'\[UNK_BYTE_[^\]]*\]', '', response)
-    response = response.replace("]", " ")
-    response = re.sub(r'\s+', ' ', response)
-    response = response.replace('```', '').strip('`')
-
-    # Добавляем пробелы между словами там, где нужно
-    response = re.sub(r'([a-z])([A-Z])', r'\1 \2', response)
-    response = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', response)
-    response = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', response)
-
-    return response.strip()
-
-
-def generate_llm_response(
-        prompt: str,
-        model_name: str,
-        quantization: str = DEFAULT_QUANTIZATION,
-        max_new_tokens: int = MAX_NEW_TOKENS,
-        temperature: float = DEFAULT_TEMPERATURE
-) -> str:
-    """Генерирует ответ от LLM модели."""
-    try:
-        return _generate_transformers_response(
-            prompt, model_name, quantization, max_new_tokens, temperature
-        )
-    except Exception as e:
-        logger.error(f"Ошибка генерации ответа: {e}")
-        return f"ERROR: {str(e)}"
-
-
-def _generate_transformers_response(
-        prompt: str,
-        model_name: str,
-        quantization: str,
-        max_new_tokens: int,
-        temperature: float
-) -> str:
-    """Внутренняя функция для генерации ответа через transformers."""
-    llm_pipeline = load_llm_pipeline(model_name, quantization=quantization)
-
-    generation_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "temperature": temperature,
-        "top_p": 0.9,
-        "top_k": 50,
-        "num_return_sequences": 1,
-        "do_sample": True if temperature > 0 else False,
-        "truncation": True,
-        "pad_token_id": llm_pipeline.tokenizer.eos_token_id,
-        "return_full_text": False  # Возвращаем только новый текст
-    }
-
-    logger.debug(f"Генерация с параметрами: {generation_kwargs}")
-
-    result = llm_pipeline(prompt, **generation_kwargs)
-
-    raw_response = result[0]["generated_text"] if result else ""
-    logger.debug(f"Raw pipeline response:\n{raw_response}")
-
-    cleaned_response = clean_model_response(raw_response, prompt)
-
-    if cleaned_response:
-        logger.info(f"Cleaned pipeline response:\n{cleaned_response}")
-
-    return cleaned_response
-
-
 def clear_model_cache():
-    """Очищает кэш загруженных моделей."""
-    global _loaded_pipelines
-    _loaded_pipelines.clear()
+    """Очищает кэш моделей для освобождения памяти"""
+    global _model_cache
+    logger.info("Очистка кэша моделей...")
+
+    for cache_key in _model_cache:
+        del _model_cache[cache_key]
+
+    _model_cache = {}
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
     logger.info("Кэш моделей очищен")
 
 
-def get_supported_models():
-    """Возвращает список популярных моделей для тестирования."""
-    return [
-        "microsoft/DialoGPT-medium",
-        "microsoft/DialoGPT-large",
-        "google/flan-t5-base",
-        "google/flan-t5-large",
-        "meta-llama/Llama-2-7b-hf",
-        "meta-llama/Llama-2-13b-hf",
-        "mistralai/Mistral-7B-v0.1",
-        "mistralai/Mistral-7B-Instruct-v0.1",
-        "NousResearch/Llama-2-7b-chat-hf",
-        "huggingface/CodeBERTa-small-v1"
+def get_available_models():
+    """Возвращает список доступных моделей"""
+    base_models = [
+        'codellama/CodeLlama-7b-Instruct-hf',
+        'mistralai/Mistral-7B-Instruct-v0.2'
     ]
+
+    # Добавляем дообученные модели
+    finetuned_models = []
+    current_dir = os.getcwd()
+
+    for item in os.listdir(current_dir):
+        if os.path.isdir(item) and (item.startswith("finetuned_") or "bnb-lora-finetuned" in item):
+            adapter_config_path = os.path.join(item, "adapter_config.json")
+            if os.path.exists(adapter_config_path):
+                finetuned_models.append(item)
+
+    return {
+        "base_models": base_models,
+        "finetuned_models": finetuned_models
+    }

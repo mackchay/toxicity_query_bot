@@ -3,11 +3,11 @@ aiogram~=3.20.0
 groq~=0.30.0
 python-dotenv~=1.1.1
 transformers~=4.53.0
-torch~=2.7.0
-bitsandbytes~=0.43.1
+torch==2.2.2
+bitsandbytes==0.46.1
 llama-cpp-python~=0.3.0
 huggingface_hub
 chardet
 openpyxl
-peft~=0.8.0
+peft==0.8.0
 datasets

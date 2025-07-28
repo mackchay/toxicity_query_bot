@@ -34,7 +34,7 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
 # === ДОБАВЛЕНО: Flow для дообучения LLM по датасету ===
-from train_llm import train_lora
+from train_llm import train_bnb_lora
 
 # Список HuggingFace моделей для дообучения (без GGUF)
 HF_FINETUNE_MODELS = [
@@ -139,11 +139,11 @@ async def handle_finetune_quant_choice(message: Message):
     try:
         await loop.run_in_executor(
             None,
-            lambda: train_lora(
+            lambda: train_bnb_lora(
                 dataset_path,
                 base_model=base_model,
                 output_dir=f"finetuned_{user_id}_{model_name}_{quant}",
-                quantization=quant
+                quantization_type=quant
             )
         )
         await message.answer(f"Дообучение завершено! LoRA-адаптер сохранён в папке finetuned_{user_id}_{model_name}_{quant}")

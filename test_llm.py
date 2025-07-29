@@ -162,11 +162,15 @@ def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=256):
     prompt = (
         "You are a strict SQL syntax corrector. You must:\n"
         "1. Analyze the BAD_SQL query.\n"
-        "2. Return the corrected version in GOOD_SQL.\n"
-        "3. Describe what was wrong in REASON.\n"
-        "4. Describe how you fixed it in FIX.\n\n"
+        "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
+        "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
+        "4. Describe how you fixed it in FIX "
+        "or write \"The query does not need to be fixed.\" in FIX if query is correct \n\n"
         "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
-        f"BAD_SQL:\n{input_sql}\n"
+        f"BAD_SQL:\n{input_sql}\n\n"
+        f"GOOD_SQL: \n<corrected>\n\n"
+        f"REASON: \n<what was wrong>\n\n"
+        f"FIX: \n<what was fixed>\n\n"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)

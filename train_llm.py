@@ -16,20 +16,40 @@ from datasets import Dataset
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("train_bnb_lora")
 
+
 def load_dataset(xlsx_path):
     logger.info(f"Загрузка датасета из {xlsx_path}")
     df = pd.read_excel(xlsx_path)
-    required_columns = ['BAD_SQL', 'GOOD_SQL', 'REASON']
+    required_columns = ['BAD_SQL', 'GOOD_SQL', 'FIX', 'REASON']
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"Отсутствует обязательный столбец: {col}")
     df = df.dropna(subset=['BAD_SQL', 'GOOD_SQL'])
 
-    df['input_text'] = df.apply(lambda row: f"BAD_SQL: {row['BAD_SQL']}\nREASON: {row['REASON']}", axis=1)
-    df['target_text'] = df['GOOD_SQL'].astype(str)
+    def build_prompt(row):
+        return (
+            "You are a strict SQL syntax corrector. You must:\n"
+            "1. Analyze the BAD_SQL query.\n"
+            "2. Return the corrected version in GOOD_SQL.\n"
+            "3. Describe what was wrong in REASON.\n"
+            "4. Describe how you fixed it in FIX.\n\n"
+            "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
+            f"BAD_SQL:\n{row['BAD_SQL']}\n"
+        )
+
+    def build_target(row):
+        return (
+            f"GOOD_SQL:\n{row['GOOD_SQL']}\n"
+            f"REASON:\n{row['REASON']}\n"
+            f"FIX:\n{row['FIX']}"
+        )
+
+    df['input_text'] = df.apply(build_prompt, axis=1)
+    df['target_text'] = df.apply(build_target, axis=1)
 
     logger.info(f"Загружено {len(df)} примеров для обучения")
     return Dataset.from_pandas(df[['input_text', 'target_text']])
+
 
 def tokenize_function(example, tokenizer, max_length=512):
     model_inputs = tokenizer(
@@ -48,6 +68,7 @@ def tokenize_function(example, tokenizer, max_length=512):
     model_inputs['labels'] = labels['input_ids']
     return model_inputs
 
+
 def get_bnb_config(quantization_type="4bit"):
     if quantization_type == "4bit":
         return BitsAndBytesConfig(
@@ -60,6 +81,7 @@ def get_bnb_config(quantization_type="4bit"):
         return BitsAndBytesConfig(load_in_8bit=True)
     else:
         raise ValueError(f"Неподдерживаемый тип квантования: {quantization_type}")
+
 
 def train_bnb_lora(
         xlsx_path,
@@ -173,8 +195,18 @@ def train_bnb_lora(
             torch.cuda.empty_cache()
 
 
-def validate_model(model_path, test_prompt="BAD_SQL: SELECT * FROM users WHERE id = 1\nREASON: Использование SELECT *"):
+def validate_model(model_path, test_prompt=None):
     logger.info(f"Проверка модели из {model_path}")
+    if test_prompt is None:
+        test_prompt = (
+            "You are a strict SQL syntax corrector. You must:\n"
+            "1. Analyze the BAD_SQL query.\n"
+            "2. Return the corrected version in GOOD_SQL.\n"
+            "3. Describe what was wrong in REASON.\n"
+            "4. Describe how you fixed it in FIX.\n\n"
+            "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
+            "BAD_SQL:\nSELECT * FROM users WHERE id = 1"
+        )
     try:
         from model_manager import generate_llm_response
         response = generate_llm_response(
@@ -182,7 +214,6 @@ def validate_model(model_path, test_prompt="BAD_SQL: SELECT * FROM users WHERE i
             model_name=model_path,
             quantization="4bit"
         )
-        logger.info(f"Тестовый промпт: {test_prompt}")
         logger.info(f"Ответ модели: {response}")
         return True
     except Exception as e:

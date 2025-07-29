@@ -12,20 +12,27 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("test_llm")
 
-
 def levenshtein_similarity(a, b):
-    """Вычисляет сходство между двумя строками по алгоритму Левенштейна"""
     return SequenceMatcher(None, a, b).ratio()
 
-
 def is_valid_sql(sql: str) -> bool:
-    """Проверяет, является ли строка валидным SQL-запросом"""
     try:
         parsed = sqlparse.parse(sql)
         return len(parsed) > 0 and len(parsed[0].tokens) > 0
     except Exception:
         return False
 
+def parse_llm_response_with_retries(model, tokenizer, bad_sql, max_attempts=3):
+    for attempt in range(max_attempts):
+        predicted_sql, predicted_fix = generate_fix_and_sql(model, tokenizer, bad_sql)
+
+        if predicted_sql and is_valid_sql(predicted_sql):
+            return predicted_sql, predicted_fix
+
+        logging.warning(f"Попытка {attempt+1} не удалась, повтор...")
+
+    logging.warning(f"Не удалось получить корректный ответ от модели для SQL после {max_attempts} попыток")
+    return None, None
 
 def load_model(model_path, model_type="base", quantization="4bit"):
     """
@@ -153,8 +160,13 @@ def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=256):
 
     # Формируем промпт в том же формате, что использовался для обучения
     prompt = (
-        f"BAD_SQL: {input_sql}\n"
-        "GOOD_SQL: "
+        "You are a strict SQL syntax corrector. You must:\n"
+        "1. Analyze the BAD_SQL query.\n"
+        "2. Return the corrected version in GOOD_SQL.\n"
+        "3. Describe what was wrong in REASON.\n"
+        "4. Describe how you fixed it in FIX.\n\n"
+        "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
+        f"BAD_SQL:\n{input_sql}\n"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
@@ -276,17 +288,18 @@ def test_model(test_data_path, model_path, model_type="base", quantization="4bit
             continue
 
         try:
-            predicted_sql, predicted_fix = generate_fix_and_sql(model, tokenizer, bad_sql)
+            predicted_sql, predicted_fix = parse_llm_response_with_retries(model, tokenizer, bad_sql)
 
-            # Вычисляем метрики
+            if not predicted_sql:
+                logger.warning(f"Отброшен невалидный ответ в строке {idx}")
+                continue
+
             sql_similarity = levenshtein_similarity(predicted_sql.lower().strip(), expected_sql.lower().strip())
             fix_similarity = levenshtein_similarity(predicted_fix.lower().strip(), expected_fix.lower().strip())
 
-            # Проверяем точное совпадение (с игнорированием регистра и пробелов)
             sql_exact_match = predicted_sql.lower().strip() == expected_sql.lower().strip()
             fix_exact_match = predicted_fix.lower().strip() == expected_fix.lower().strip()
 
-            # Проверяем валидность SQL
             is_predicted_sql_valid = is_valid_sql(predicted_sql)
             is_expected_sql_valid = is_valid_sql(expected_sql)
 

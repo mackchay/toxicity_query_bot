@@ -290,8 +290,6 @@ def build_prompt_csv(bad_sql):
     )
 
 async def llm_fix_and_optimize_async(prompt):
-    import aiohttp
-    import json
     import asyncio
     # Первая попытка — задержка 3 секунды
     await asyncio.sleep(3)

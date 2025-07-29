@@ -94,7 +94,7 @@ def train_bnb_lora(
         lora_alpha=32,
         lora_dropout=0.05,
         batch_size=1,
-        epochs=3,
+        epochs=5,
         lr=2e-4,
         max_length=512,
         gradient_accumulation_steps=16

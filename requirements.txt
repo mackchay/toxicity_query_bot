@@ -30,4 +30,4 @@ llama-cpp-python~=0.3.0
 
 sqlparse
 tqdm
-telegram~=14.0.0
+telegram~=0.0.1

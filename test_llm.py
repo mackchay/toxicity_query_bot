@@ -12,6 +12,14 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("test_llm")
 
+GENERATION_CONFIG = {
+    "max_new_tokens": 512,
+    "temperature": 0.3,
+    "top_p": 0.9,
+    "do_sample": True,
+    "repetition_penalty": 1.1
+}
+
 def levenshtein_similarity(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
@@ -143,7 +151,7 @@ def load_model(model_path, model_type="base", quantization="4bit"):
     return model, tokenizer
 
 
-def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=256):
+def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=512):
     """
     Генерирует исправленный SQL и описание исправления
 
@@ -164,13 +172,10 @@ def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=256):
         "1. Analyze the BAD_SQL query.\n"
         "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
         "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
-        "4. Describe how you fixed it in FIX "
-        "or write \"The query does not need to be fixed.\" in FIX if query is correct \n\n"
-        "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
-        f"BAD_SQL:\n{input_sql}\n\n"
-        f"GOOD_SQL: \n<corrected>\n\n"
-        f"REASON: \n<what was wrong>\n\n"
-        f"FIX: \n<what was fixed>\n\n"
+        "4. Describe how you fixed it in FIX or write \"The query does not need to be fixed.\" in FIX if query is correct.\n\n"
+        "IMPORTANT: Always return strictly the following format, without any extra text:\n\n"
+        f"BAD_SQL:\n{input_sql}\n"
+        "GOOD_SQL:\n"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
@@ -178,13 +183,7 @@ def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=256):
 
     with torch.no_grad():
         outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id
+            **inputs, **GENERATION_CONFIG
         )
 
     # Декодируем ответ

@@ -8,13 +8,14 @@ from transformers import (
     TrainingArguments,
     Trainer,
     BitsAndBytesConfig,
-    DataCollatorForSeq2Seq
+    DataCollatorForLanguageModeling
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from datasets import Dataset
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("train_bnb_lora")
+BATCH_SIZE = 4
 
 
 def load_dataset(xlsx_path):
@@ -29,16 +30,13 @@ def load_dataset(xlsx_path):
     def build_prompt(row):
         return (
             "You are a strict SQL syntax corrector. You must:\n"
-        "1. Analyze the BAD_SQL query.\n"
-        "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
-        "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
-        "4. Describe how you fixed it in FIX "
-        "or write \"The query does not need to be fixed.\" in FIX if query is correct \n\n"
-        "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
-        f"BAD_SQL:\n{row}\n\n"
-        f"GOOD_SQL: \n<corrected>\n\n"
-        f"REASON: \n<what was wrong>\n\n"
-        f"FIX: \n<what was fixed>\n\n"
+    "1. Analyze the BAD_SQL query.\n"
+    "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
+    "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
+    "4. Describe how you fixed it in FIX or write \"The query does not need to be fixed.\" in FIX if query is correct.\n\n"
+    "IMPORTANT: Always return strictly the following format, without any extra text:\n\n"
+    f"BAD_SQL:\n{row}\n"
+    "GOOD_SQL:\n"
         )
 
     def build_target(row):
@@ -55,22 +53,18 @@ def load_dataset(xlsx_path):
     return Dataset.from_pandas(df[['input_text', 'target_text']])
 
 
+# Заменить всю функцию tokenize_function
 def tokenize_function(example, tokenizer, max_length=512):
-    model_inputs = tokenizer(
-        example['input_text'],
+    text = example['input_text'] + example['target_text']
+    tokenized = tokenizer(
+        text,
         max_length=max_length,
         padding='max_length',
-        truncation=True
+        truncation=True,
+        return_tensors="pt"
     )
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(
-            example['target_text'],
-            max_length=max_length,
-            padding='max_length',
-            truncation=True
-        )
-    model_inputs['labels'] = labels['input_ids']
-    return model_inputs
+    tokenized["labels"] = tokenized["input_ids"].clone()
+    return tokenized
 
 
 def get_bnb_config(quantization_type="4bit"):
@@ -167,10 +161,10 @@ def train_bnb_lora(
         dataloader_pin_memory=False,
     )
 
-    data_collator = DataCollatorForSeq2Seq(
+    # Заменить коллатор
+    data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
-        model=model,
-        padding=True
+        mlm=False
     )
 
     trainer = Trainer(

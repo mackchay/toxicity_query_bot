@@ -1,8 +1,6 @@
 import pandas as pd
 import os
 import chardet
-import re
-
 
 def detect_encoding(file_path, sample_size=10000):
     with open(file_path, 'rb') as f:
@@ -158,9 +156,6 @@ def preprocess(input_xlsx, output_path):
     valid_sql_mask = df['BAD_SQL'].apply(is_valid_sql)
     df = df[valid_sql_mask]
 
-    canceled_mask = df['REASON'].str.contains('cancell?ed|query was canceled', case=False, regex=True)
-    df = df[~canceled_mask]
-
     success_mask = df['STATUS'].str.lower().isin(['success', 'succes', 'успех'])
     success_df = df[success_mask].copy()
     success_df['ERROR_CLASS'] = 'Success'
@@ -184,17 +179,20 @@ def preprocess(input_xlsx, output_path):
     fail_df = fail_df.dropna(subset=['REASON'])
     fail_df['ERROR_CLASS'] = fail_df['REASON'].apply(classify_reason)
 
+    # Правка REASON для CanceledError
+    fail_df.loc[fail_df['ERROR_CLASS'] == 'CanceledError', 'REASON'] = 'Query exceeded maximum time or memory limit'
+
     fixable_errors = [
         'SyntaxError', 'TypeError', 'FunctionError', 'IndexError',
-        'AmbiguityError', 'ResourceError', 'TooManyConnectionsError',
+        'AmbiguityError', 'ResourceError',
         'QueryTooLargeError', 'ObjectAlreadyExistsError', 'FunctionSignatureError',
-        'CastError', 'OptimizerError'
+        'CastError', 'OptimizerError', 'CanceledError'
     ]
 
     non_fixable_errors = [
-        'PermissionError', 'MissingObjectError', 'CanceledError',
+        'PermissionError', 'MissingObjectError',
         'TransientError', 'MetastoreError', 'AuthError', 'MissingColumnError',
-        'MissingSchemaError', 'SelectStarError'
+        'MissingSchemaError', 'SelectStarError', 'TooManyConnectionsError'
     ]
 
     fail_df['IS_FIXABLE'] = fail_df['ERROR_CLASS'].isin(fixable_errors)
@@ -202,7 +200,6 @@ def preprocess(input_xlsx, output_path):
     fail_df.loc[fail_df['ERROR_CLASS'] == 'Other', 'IS_FIXABLE'] = False
 
     df_result = pd.concat([success_df, fail_df], ignore_index=True)
-    df_result = df_result[df_result['ERROR_CLASS'] != 'CanceledError']
 
     if output_path.lower().endswith('.xlsx'):
         df_result.to_excel(output_path, index=False)

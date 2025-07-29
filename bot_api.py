@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 from groq import Groq
+import sqlparse
 
 # === Загрузка переменных окружения и настройка логирования ===
 load_dotenv()
@@ -30,7 +31,6 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 # === Telegram Bot Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start"""
     user_id = update.effective_user.id
     USER_STATE[user_id] = {'dataset': None, 'queries': None, 'schema': None}
     await update.message.reply_text(
@@ -50,12 +50,10 @@ def main_menu_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик нажатий кнопок"""
     query = update.callback_query
     logger.info(f"button_handler start: user_id={query.from_user.id}, data={query.data}")
     await query.answer()
     user_id = query.from_user.id
-    # Автоматическая инициализация состояния пользователя
     if user_id not in USER_STATE:
         USER_STATE[user_id] = {'dataset': None, 'queries': None, 'schema': None}
     data = query.data
@@ -77,7 +75,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info("button_handler end (error)")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик загрузки документов"""
     user_id = update.effective_user.id
     if user_id not in USER_STATE or 'awaiting' not in USER_STATE[user_id]:
         await update.message.reply_text("❌ Сначала выберите тип файла!")
@@ -93,15 +90,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     del USER_STATE[user_id]['awaiting']
     await update.message.reply_text(f"✅ Файл {file_type} успешно загружен!", reply_markup=main_menu_keyboard())
 
-
-# === Изменения в функции process_sql_queries ===
 async def process_sql_queries(user_id: int, context: ContextTypes.DEFAULT_TYPE, message) -> None:
     try:
         queries_path = USER_STATE[user_id]['queries']
         original_name = USER_STATE[user_id].get('queries_original_name', '')
         ext = os.path.splitext(original_name)[1].lower() if original_name else os.path.splitext(queries_path)[1].lower()
 
-        # Получаем ДОПОЛНИТЕЛЬНО список fixables
         queries, reasons, statuses, fixables = load_queries_and_reasons(queries_path, ext)
 
         if not queries:
@@ -114,81 +108,42 @@ async def process_sql_queries(user_id: int, context: ContextTypes.DEFAULT_TYPE, 
             batch = queries[i:i + BATCH_SIZE]
             batch_reasons = reasons[i:i + BATCH_SIZE]
             batch_statuses = statuses[i:i + BATCH_SIZE]
-            batch_fixables = fixables[i:i + BATCH_SIZE]  # Новый параметр
+            batch_fixables = fixables[i:i + BATCH_SIZE]
 
             if ext == '.xlsx':
-                # Передаем fixables в обработчик
-                batch_result = await process_batch_xlsx(
-                    batch,
-                    batch_reasons,
-                    batch_statuses,
-                    batch_fixables
-                )
+                batch_result = await process_batch_xlsx(batch, batch_reasons, batch_statuses, batch_fixables)
             else:
                 batch_result = await process_batch(batch, batch_reasons)
             results.extend(batch_result)
-        # Выбираем формат сохранения результата
-        if ext == '.xlsx':
-            output_file = f"results_{user_id}.xlsx"
-        else:
-            output_file = f"results_{user_id}.csv"
+
+        output_file = f"results_{user_id}.xlsx" if ext == '.xlsx' else f"results_{user_id}.csv"
         save_results_to_file(output_file, results, ext)
-        await context.bot.send_document(
-            chat_id=user_id,
-            document=output_file,
-            caption="✅ Результаты обработки SQL-запросов"
-        )
+        await context.bot.send_document(chat_id=user_id, document=output_file, caption="✅ Результаты обработки SQL-запросов")
         cleanup_temp_files(user_id, output_file)
     except Exception as e:
         logger.error(f"Error processing SQL queries: {e}")
         await context.bot.send_message(chat_id=user_id, text=f"❌ Ошибка при обработке запросов: {str(e)}")
 
-
-# === Изменения в функции load_queries_and_reasons ===
 def load_queries_and_reasons(file_path, ext):
-    """Загрузка SQL-запросов, причин, статусов и флагов fixable"""
     queries, reasons, statuses, fixables = [], [], [], []
     if ext == '.xlsx':
         df = pd.read_excel(file_path)
-
-        # Проверка обязательных столбцов
         if 'BAD_SQL' not in df.columns or 'REASON' not in df.columns:
             return [], [], [], []
-
-        # Инициализация optional columns
         df['STATUS'] = df.get('STATUS', None)
-        df['IS_FIXABLE'] = df.get('IS_FIXABLE', True)  # По умолчанию True
-
-        # Предобработка флагов fixable
+        df['IS_FIXABLE'] = df.get('IS_FIXABLE', True)
         df['IS_FIXABLE'] = df['IS_FIXABLE'].astype(str).str.strip().str.lower()
         df['IS_FIXABLE'] = df['IS_FIXABLE'].map({
-            'true': True,
-            'false': False,
-            '1': True,
-            '0': False,
-            'yes': True,
-            'no': False
-        }).fillna(True)  # Неизвестные значения -> True
-
-        # Фильтрация данных
+            'true': True, 'false': False, '1': True, '0': False, 'yes': True, 'no': False
+        }).fillna(True)
         mask_succes = df['STATUS'].astype(str).str.strip().str.lower() == 'succes'
         mask_other = ~mask_succes
-
-        df_succes = df[mask_succes]
-        df_other = df[mask_other]
-        df_other = df_other.dropna(subset=['BAD_SQL', 'REASON'])
-        df_other = df_other[df_other['BAD_SQL'].astype(str).str.strip().astype(bool)]
-
-        # Объединение данных
-        df_final = pd.concat([df_succes, df_other], ignore_index=True)
-
-        # Формирование списков
+        df_final = pd.concat([df[mask_succes], df[mask_other].dropna(subset=['BAD_SQL', 'REASON'])], ignore_index=True)
         queries = df_final['BAD_SQL'].astype(str).tolist()
         reasons = df_final['REASON'].astype(str).tolist()
         statuses = df_final['STATUS'].astype(str).tolist()
         fixables = df_final['IS_FIXABLE'].tolist()
-
-    else:  # CSV обработка
+    else:
         with open(file_path, 'r', newline='', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
@@ -196,35 +151,13 @@ def load_queries_and_reasons(file_path, ext):
                     queries.append(row[0])
         reasons = [None] * len(queries)
         statuses = [None] * len(queries)
-        fixables = [True] * len(queries)  # Для CSV всегда True
-
+        fixables = [True] * len(queries)
     return queries, reasons, statuses, fixables
-
-def parse_llm_response(response: str):
-    # Регулярка для поиска блоков
-    pattern = r"BAD_SQL:\s*(.*?)\s*GOOD_SQL:\s*(.*?)\s*REASON:\s*(.*?)\s*FIX:\s*(.*)"
-    match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
-    if match:
-        bad_sql, good_sql, reason, fix = match.groups()
-        return {
-            'BAD_SQL': bad_sql.strip(),
-            'GOOD_SQL': good_sql.strip(),
-            'REASON': reason.strip(),
-            'FIX': fix.strip(),
-        }
-    # Если не удалось распарсить, вернуть всё в REASON
-    return {
-        'BAD_SQL': '',
-        'GOOD_SQL': '',
-        'REASON': response.strip(),
-        'FIX': ''
-    }
 
 def save_results_to_file(output_file, results, ext):
     headers = ['BAD_SQL', 'REASON', 'GOOD_SQL', 'FIX']
     if ext == '.xlsx':
         df = pd.DataFrame(results)
-        # Гарантируем порядок и наличие всех колонок
         for h in headers:
             if h not in df.columns:
                 df[h] = ''
@@ -249,54 +182,39 @@ def cleanup_temp_files(user_id, output_file):
                 pass
     del USER_STATE[user_id]
 
-# === LLM Batch Processing ===
-MAX_PROMPT_LEN = 2000  # Максимальная длина для каждой части промпта
+MAX_PROMPT_LEN = 2000
 
 def safe_prompt(text):
-    if text is None:
-        return ''
-    return str(text)[:MAX_PROMPT_LEN]
+    return str(text)[:MAX_PROMPT_LEN] if text else ''
 
 def build_prompt_xlsx(bad_sql, reason):
-    bad_sql = safe_prompt(bad_sql)
-    reason = safe_prompt(reason)
     return (
-        "You are an expert SQL assistant.\n"
-        "Your task is to analyze each SQL query, detect if it is invalid or contains an error, and correct it.\n"
-        "Then, return the result in the following structured format:\n\n"
-        "BAD_SQL: <original query>\n"
-        "GOOD_SQL: <corrected query>\n"
-        "REASON: <why the original query was incorrect>\n"
-        "FIX: <what exactly was changed to fix the error>\n\n"
-        "You must follow this output format strictly.\n\n"
-        "Now, process the following SQL query:\n\n"
-        f"BAD_SQL:\n{bad_sql}\n"
-        f"REASON:\n{reason}\n"
+        "You are a strict SQL syntax corrector. You must:\n"
+        "1. Analyze the BAD_SQL query.\n"
+        "2. Return the corrected version in GOOD_SQL.\n"
+        "3. Clearly explain what was wrong in REASON.\n"
+        "4. Describe how you fixed it in FIX.\n\n"
+        "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
+        f"BAD_SQL:\n{safe_prompt(bad_sql)}\n\nREASON:\n{safe_prompt(reason)}"
     )
 
 def build_prompt_csv(bad_sql):
-    bad_sql = safe_prompt(bad_sql)
     return (
         "You are an expert SQL assistant.\n"
-        "Your task is to analyze each SQL query, detect if it is invalid or contains an error, and correct it.\n"
-        "Then, return the result in the following structured format:\n\n"
-        "BAD_SQL: <original query>\n"
-        "GOOD_SQL: <corrected query>\n"
-        "REASON: <why the original query was incorrect>\n"
-        "FIX: <what exactly was changed to fix the error>\n\n"
-        "You must follow this output format strictly.\n\n"
-        "Now, process the following SQL query:\n\n"
-        f"BAD_SQL:\n{bad_sql}\n"
+        "Analyze each query and correct if needed.\n"
+        "Respond strictly in format:\n"
+        "BAD_SQL: <original>\n"
+        "GOOD_SQL: <corrected>\n"
+        "REASON: <what was wrong>\n"
+        "FIX: <what was fixed>\n\n"
+        f"BAD_SQL:\n{safe_prompt(bad_sql)}\n"
     )
 
 async def llm_fix_and_optimize_async(prompt):
-    import asyncio
-    # Первая попытка — задержка 3 секунды
     await asyncio.sleep(3)
     max_attempts = 4
     for attempt in range(max_attempts):
         try:
-            # Синхронный groq_client не поддерживает async, поэтому используем run_in_executor
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -307,47 +225,52 @@ async def llm_fix_and_optimize_async(prompt):
                     ],
                     model=GROQ_MODEL,
                     temperature=0.1,
-                    max_tokens=1000
+                    max_tokens=5000
                 )
             )
             result = response.choices[0].message.content.strip()
-            # Удаляем ''' и """ и лишние пробелы/переводы строк вокруг
             for bad in ["'''", '"""']:
                 if result.startswith(bad) and result.endswith(bad):
                     result = result[len(bad):-len(bad)]
-            result = result.strip()
-            return result
+            return result.strip()
         except Exception as e:
-            err_str = str(e).lower()
-            if 'too many requests' in err_str or '429' in err_str:
-                if attempt < max_attempts - 1:
-                    logger.warning('Too many requests, waiting 25 seconds before retry...')
-                    await asyncio.sleep(25)
-                    continue
-            raise
+            if 'too many requests' in str(e).lower() and attempt < max_attempts - 1:
+                logger.warning('Too many requests, waiting 25 seconds before retry...')
+                await asyncio.sleep(25)
+            else:
+                raise
 
+async def parse_llm_response_with_retries(prompt: str, max_attempts: int = 3):
+    from asyncio import sleep
+    for attempt in range(max_attempts):
+        response = await llm_fix_and_optimize_async(prompt)
+        pattern = r"BAD_SQL:\s*(.*?)\s*GOOD_SQL:\s*(.*?)\s*REASON:\s*(.*?)\s*FIX:\s*(.*)"
+        match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
+        if match:
+            bad_sql, good_sql, reason, fix = match.groups()
+            parsed = sqlparse.parse(good_sql.strip())
+            if parsed and any(str(stmt).strip().lower().startswith(('select', 'insert', 'update', 'delete', 'create', 'with')) for stmt in parsed):
+                return {
+                    'BAD_SQL': bad_sql.strip(),
+                    'GOOD_SQL': good_sql.strip(),
+                    'REASON': reason.strip(),
+                    'FIX': fix.strip(),
+                }
+        await sleep(3)
+    return None
 
-# === Изменения в функции process_batch_xlsx ===
-async def process_batch_xlsx(
-        queries: list,
-        reasons: list,
-        statuses: list,
-        fixables: list  # Новый параметр
-) -> list:
+async def process_batch_xlsx(queries, reasons, statuses, fixables):
     results = []
     for bad_sql, reason, status, fixable in zip(queries, reasons, statuses, fixables):
-        # 1. Проверка IS_FIXABLE == False
         if not fixable:
             results.append({
                 'BAD_SQL': bad_sql,
-                'GOOD_SQL': bad_sql,  # Копируем оригинальный запрос
+                'GOOD_SQL': bad_sql,
                 'REASON': reason,
                 'FIX': 'Error cannot be fixed without database analysis'
             })
             continue
-
-        # 2. Обработка статуса SUCCES (существующая логика)
-        if status is not None and str(status).strip().lower() == 'succes':
+        if status and str(status).strip().lower() == 'succes':
             results.append({
                 'BAD_SQL': bad_sql,
                 'GOOD_SQL': bad_sql,
@@ -355,49 +278,36 @@ async def process_batch_xlsx(
                 'FIX': 'The query does not need to be fixed.'
             })
             continue
-
-        # 3. Обработка через LLM
-        if reason is None or str(reason).strip().lower() in ('', 'nan', 'none'):
+        if not reason or str(reason).strip().lower() in ('', 'nan', 'none'):
             results.append({
                 'BAD_SQL': bad_sql,
                 'GOOD_SQL': bad_sql,
                 'REASON': reason or '',
                 'FIX': ''
             })
+            continue
+        prompt = build_prompt_xlsx(bad_sql, reason)
+        parsed = await parse_llm_response_with_retries(prompt, max_attempts=3)
+        if parsed:
+            results.append(parsed)
         else:
-            prompt = build_prompt_xlsx(bad_sql, reason)
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                llm_response = await llm_fix_and_optimize_async(prompt)
-                parsed = parse_llm_response(llm_response)
-                if parsed['BAD_SQL']:
-                    results.append(parsed)
-                    break
-                elif attempt == max_attempts - 1:
-                    results.append({
-                        'BAD_SQL': bad_sql,
-                        'GOOD_SQL': '',
-                        'REASON': llm_response,
-                        'FIX': ''
-                    })
-                else:
-                    await asyncio.sleep(3)
+            logger.warning(f"❌ Failed to parse response for BAD_SQL: {bad_sql[:100]}")
     return results
 
-async def process_batch(queries: list, reasons: list = None) -> list:
-    """Обработка пачки SQL-запросов из csv (только BAD_SQL, reason может быть None)"""
+async def process_batch(queries, reasons=None):
     results = []
     if reasons is None:
         reasons = [''] * len(queries)
     for bad_sql, reason in zip(queries, reasons):
         prompt = build_prompt_csv(bad_sql)
-        llm_response = await llm_fix_and_optimize_async(prompt)
-        parsed = parse_llm_response(llm_response)
-        results.append(parsed)
+        parsed = await parse_llm_response_with_retries(prompt)
+        if parsed:
+            results.append(parsed)
+        else:
+            logger.warning(f"❌ Failed to parse response for BAD_SQL: {bad_sql[:100]}")
     return results
 
-# === Telegram Bot Main ===
-def main() -> None:
+def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))

@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("train_bnb_lora")
 BATCH_SIZE = 4
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def load_dataset(xlsx_path):
     logger.info(f"Загрузка датасета из {xlsx_path}")
@@ -53,19 +54,22 @@ def load_dataset(xlsx_path):
     return Dataset.from_pandas(df[['input_text', 'target_text']])
 
 
-# Заменить всю функцию tokenize_function
-def tokenize_function(example, tokenizer, max_length=512):
-    text = example['input_text'] + example['target_text']
-    tokenized = tokenizer(
-        text,
+def tokenize_function(examples, tokenizer, max_length=512):
+    model_inputs = tokenizer(
+        examples['input_text'],
         max_length=max_length,
         padding='max_length',
-        truncation=True,
-        return_tensors="pt"
+        truncation=True
     )
-    tokenized["labels"] = tokenized["input_ids"].clone()
-    return tokenized
-
+    with tokenizer.as_target_tokenizer():
+        labels = tokenizer(
+            examples['target_text'],
+            max_length=max_length,
+            padding='max_length',
+            truncation=True
+        )
+    model_inputs['labels'] = labels['input_ids']
+    return model_inputs
 
 def get_bnb_config(quantization_type="4bit"):
     if quantization_type == "4bit":

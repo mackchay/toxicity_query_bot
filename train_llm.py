@@ -53,7 +53,6 @@ def load_dataset(xlsx_path):
     logger.info(f"Загружено {len(df)} примеров для обучения")
     return Dataset.from_pandas(df[['input_text', 'target_text']])
 
-
 def tokenize_function(examples, tokenizer, max_length=512):
     model_inputs = tokenizer(
         examples['input_text'],
@@ -70,6 +69,7 @@ def tokenize_function(examples, tokenizer, max_length=512):
         )
     model_inputs['labels'] = labels['input_ids']
     return model_inputs
+
 
 def get_bnb_config(quantization_type="4bit"):
     if quantization_type == "4bit":
@@ -143,7 +143,7 @@ def train_bnb_lora(
     dataset = load_dataset(xlsx_path)
     tokenized_dataset = dataset.map(
         lambda x: tokenize_function(x, tokenizer, max_length),
-        batched=False,
+        batched=True,  # ВАЖНО
         remove_columns=dataset.column_names
     )
 

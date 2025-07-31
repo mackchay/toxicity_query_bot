@@ -50,9 +50,50 @@ BASE_MODELS = [
 
 def get_main_kb():
     """Главное меню с выбором действия"""
-    buttons = ['Обучить LLM', 'Протестировать LLM', 'Загрузить схему БД']
+    buttons = ['Обучить LLM', 'Протестировать LLM', 'Исправить SQL-запросы']  # ← здесь заменено
     kb = [[KeyboardButton(text=btn)] for btn in buttons]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+@router.message(lambda message: message.text == 'Исправить SQL-запрос')
+async def fix_sql_request(message: Message):
+    """Обработка запроса на исправление SQL"""
+    if not message.from_user:
+        await message.answer("Ошибка: не удалось определить пользователя.")
+        return
+
+    set_user_state(message.from_user.id, "fix_sql")
+    await message.answer(
+        "Пожалуйста, отправьте SQL-запрос, который вы хотите исправить.\n"
+        "Я постараюсь сделать его корректным и более эффективным."
+    )
+
+@router.message(lambda message: get_user_state(message.from_user.id) == "fix_sql")
+async def handle_sql_fix_request(message: Message):
+    """Получение и исправление SQL-запроса"""
+    if not message.from_user or not message.text:
+        await message.answer("Ошибка: запрос пустой.")
+        return
+
+    raw_sql = message.text
+
+    await message.answer("Обрабатываю запрос...")
+
+    try:
+        # Пример простого вызова модели или функции
+        # Здесь ты можешь вызвать свой LLM, локально или через API
+        # Ниже — заглушка
+        fixed_sql = "SELECT id, name FROM users WHERE active = TRUE;"  # замените на вызов LLM
+
+        await message.answer(
+            f"🔧 Исправленный SQL-запрос:\n```\n{fixed_sql}\n```",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        await message.answer(f"Ошибка при обработке запроса: {str(e)}")
+
+    set_user_state(message.from_user.id, STATE_MAIN)
+    await message.answer("Возврат в главное меню.", reply_markup=get_main_kb())
 
 
 def get_finetune_model_kb():

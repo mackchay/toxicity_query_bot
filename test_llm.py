@@ -14,7 +14,7 @@ logger = logging.getLogger("test_llm")
 
 GENERATION_CONFIG = {
     "max_new_tokens": 512,
-    "temperature": 0.3,
+    "temperature": 0.2,
     "top_p": 0.9,
     "do_sample": True,
     "repetition_penalty": 1.1

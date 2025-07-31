@@ -1,6 +1,17 @@
 import pandas as pd
 import os
 import chardet
+import re
+
+def remove_sql_comments(sql: str) -> str:
+    """Удаляет однострочные (--) и многострочные (/* */) комментарии из SQL"""
+    if not isinstance(sql, str):
+        return sql
+    # Удаление /* ... */
+    sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+    # Удаление -- до конца строки
+    sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
+    return sql.strip()
 
 def detect_encoding(file_path, sample_size=10000):
     with open(file_path, 'rb') as f:
@@ -152,6 +163,10 @@ def preprocess(input_xlsx, output_path):
     df = df[['STATUS', 'REASON', 'BAD_SQL']].copy()
     df['REASON'] = df['REASON'].astype(str).str.replace('\n', ' ', regex=False)
     df['BAD_SQL'] = df['BAD_SQL'].astype(str).str.replace('\n', ' ', regex=False)
+    df['BAD_SQL'] = df['BAD_SQL'].apply(remove_sql_comments)
+
+    # Приведение всех текстовых значений к нижнему регистру
+    df = df.applymap(lambda x: x.lower() if isinstance(x, str) else x)
 
     valid_sql_mask = df['BAD_SQL'].apply(is_valid_sql)
     df = df[valid_sql_mask]
@@ -200,6 +215,11 @@ def preprocess(input_xlsx, output_path):
     fail_df.loc[fail_df['ERROR_CLASS'] == 'Other', 'IS_FIXABLE'] = False
 
     df_result = pd.concat([success_df, fail_df], ignore_index=True)
+    # Отфильтровываем: исключаем non-fixable, кроме SelectStarError
+    df_result = df_result[
+        (df_result['IS_FIXABLE']) |
+        (df_result['ERROR_CLASS'] == 'SelectStarError')
+        ].copy()
 
     if output_path.lower().endswith('.xlsx'):
         df_result.to_excel(output_path, index=False)

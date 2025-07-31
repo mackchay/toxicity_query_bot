@@ -166,7 +166,7 @@ def preprocess(input_xlsx, output_path):
     df['BAD_SQL'] = df['BAD_SQL'].apply(remove_sql_comments)
 
     # Приведение всех текстовых значений к нижнему регистру
-    df = df.applymap(lambda x: x.lower() if isinstance(x, str) else x)
+    df = df.map(lambda x: x.lower() if isinstance(x, str) else x)
 
     valid_sql_mask = df['BAD_SQL'].apply(is_valid_sql)
     df = df[valid_sql_mask]
@@ -176,20 +176,7 @@ def preprocess(input_xlsx, output_path):
     success_df['ERROR_CLASS'] = 'Success'
     success_df['IS_FIXABLE'] = True
 
-    # Обработка SELECT * и аналогичных форм
-    select_star_pattern = r'\bselect\s+(?:\*|\w+\.\*)'
-    select_star_mask = success_df['BAD_SQL'].str.contains(select_star_pattern, case=False, regex=True)
-
-    if select_star_mask.any():
-        select_star_df = success_df[select_star_mask].copy()
-        select_star_df['STATUS'] = 'FAI'
-        select_star_df['REASON'] = 'Использование SELECT * без указания столбцов'
-        select_star_df['IS_FIXABLE'] = False
-        select_star_df['ERROR_CLASS'] = 'SelectStarError'
-        success_df = success_df[~select_star_mask]
-        fail_df = pd.concat([df[~success_mask], select_star_df], ignore_index=True)
-    else:
-        fail_df = df[~success_mask].copy()
+    fail_df = df[~success_mask].copy()
 
     fail_df = fail_df.dropna(subset=['REASON'])
     fail_df['ERROR_CLASS'] = fail_df['REASON'].apply(classify_reason)
@@ -213,6 +200,19 @@ def preprocess(input_xlsx, output_path):
     fail_df['IS_FIXABLE'] = fail_df['ERROR_CLASS'].isin(fixable_errors)
     fail_df.loc[fail_df['ERROR_CLASS'].isin(non_fixable_errors), 'IS_FIXABLE'] = False
     fail_df.loc[fail_df['ERROR_CLASS'] == 'Other', 'IS_FIXABLE'] = False
+
+    # Обработка SELECT * и аналогичных форм
+    select_star_pattern = r'\bselect\s+(?:\*|\w+\.\*)'
+    select_star_mask = success_df['BAD_SQL'].str.contains(select_star_pattern, case=False, regex=True)
+
+    if select_star_mask.any():
+        select_star_df = success_df[select_star_mask].copy()
+        select_star_df['STATUS'] = 'FAI'
+        select_star_df['REASON'] = 'Use of SELECT * and non-specific columns'
+        select_star_df['IS_FIXABLE'] = False
+        select_star_df['ERROR_CLASS'] = 'SelectStarError'
+        success_df = success_df[~select_star_mask]
+        fail_df = pd.concat([fail_df, select_star_df], ignore_index=True)
 
     df_result = pd.concat([success_df, fail_df], ignore_index=True)
     # Отфильтровываем: исключаем non-fixable, кроме SelectStarError

@@ -111,4 +111,4 @@ def parse_model_response(response: str) -> tuple:
     if not fix_description:
         fix_description = "No fix description provided"
 
-    return corrected_sql, fix_description
+    return corrected_sql.lower(), fix_description.lower()

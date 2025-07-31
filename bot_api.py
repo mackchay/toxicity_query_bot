@@ -251,10 +251,10 @@ async def parse_llm_response_with_retries(prompt: str, max_attempts: int = 3):
             parsed = sqlparse.parse(good_sql.strip())
             if parsed and any(str(stmt).strip().lower().startswith(('select', 'insert', 'update', 'delete', 'create', 'with')) for stmt in parsed):
                 return {
-                    'BAD_SQL': bad_sql.strip(),
-                    'GOOD_SQL': good_sql.strip(),
-                    'REASON': reason.strip(),
-                    'FIX': fix.strip(),
+                    'BAD_SQL': bad_sql.lower().strip(),
+                    'GOOD_SQL': good_sql.lower().strip(),
+                    'REASON': reason.lower().strip(),
+                    'FIX': fix.lower().strip(),
                 }
         await sleep(3)
     return None
@@ -267,7 +267,7 @@ async def process_batch_xlsx(queries, reasons, statuses, fixables):
                 'BAD_SQL': bad_sql,
                 'GOOD_SQL': bad_sql,
                 'REASON': reason,
-                'FIX': 'Error cannot be fixed without database analysis'
+                'FIX': 'error cannot be fixed without database analysis'
             })
             continue
         if status and str(status).strip().lower() == 'succes':
@@ -275,7 +275,7 @@ async def process_batch_xlsx(queries, reasons, statuses, fixables):
                 'BAD_SQL': bad_sql,
                 'GOOD_SQL': bad_sql,
                 'REASON': '',
-                'FIX': 'The query does not need to be fixed.'
+                'FIX': 'the query does not need to be fixed.'
             })
             continue
         if not reason or str(reason).strip().lower() in ('', 'nan', 'none'):

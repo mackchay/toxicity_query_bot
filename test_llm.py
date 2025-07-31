@@ -4,9 +4,9 @@ import sqlparse
 import os
 import logging
 from difflib import SequenceMatcher
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from peft import PeftModel
 from tqdm import tqdm
+from model_manager import load_model_and_tokenizer, generate_llm_response
+from prompt_handler import build_sql_correction_prompt, parse_model_response
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -20,8 +20,10 @@ GENERATION_CONFIG = {
     "repetition_penalty": 1.1
 }
 
+
 def levenshtein_similarity(a, b):
     return SequenceMatcher(None, a, b).ratio()
+
 
 def is_valid_sql(sql: str) -> bool:
     try:
@@ -30,218 +32,46 @@ def is_valid_sql(sql: str) -> bool:
     except Exception:
         return False
 
-def parse_llm_response_with_retries(model, tokenizer, bad_sql, max_attempts=3):
+
+def parse_llm_response_with_retries(model_name, bad_sql, max_attempts=3, quantization="4bit"):
+    """
+    Генерирует ответ модели с повторными попытками через model_manager
+
+    Args:
+        model_name: Название модели
+        bad_sql: Исходный SQL запрос
+        max_attempts: Максимальное количество попыток
+        quantization: Тип квантования
+
+    Returns:
+        tuple: (predicted_sql, predicted_fix)
+    """
     for attempt in range(max_attempts):
-        predicted_sql, predicted_fix = generate_fix_and_sql(model, tokenizer, bad_sql)
+        try:
+            # Строим промпт через prompt_handler
+            prompt = build_sql_correction_prompt(bad_sql)
 
-        if predicted_sql and is_valid_sql(predicted_sql):
-            return predicted_sql, predicted_fix
+            # Генерируем ответ через model_manager
+            response = generate_llm_response(
+                prompt=prompt,
+                model_name=model_name,
+                quantization=quantization,
+                max_new_tokens=GENERATION_CONFIG["max_new_tokens"]
+            )
 
-        logging.warning(f"Попытка {attempt+1} не удалась, повтор...")
+            # Парсим ответ через prompt_handler
+            predicted_sql, predicted_fix = parse_model_response(response)
+
+            if predicted_sql and is_valid_sql(predicted_sql):
+                return predicted_sql, predicted_fix
+
+            logging.warning(f"Попытка {attempt + 1} не удалась, повтор...")
+
+        except Exception as e:
+            logging.error(f"Ошибка в попытке {attempt + 1}: {str(e)}")
 
     logging.warning(f"Не удалось получить корректный ответ от модели для SQL после {max_attempts} попыток")
     return None, None
-
-def load_model(model_path, model_type="base", quantization="4bit"):
-    """
-    Загружает модель (базовую или дообученную) с квантованием
-
-    Args:
-        model_path: Путь к модели или HuggingFace model ID
-        model_type: "base" или "finetuned"
-        quantization: Тип квантования ("4bit", "8bit", "fp16")
-
-    Returns:
-        tuple: (model, tokenizer)
-    """
-    logger.info(f"Загрузка модели: {model_path}, тип: {model_type}, квантование: {quantization}")
-
-    # Настройка квантования
-    if quantization == "4bit":
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-        )
-    elif quantization == "8bit":
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-        )
-    else:  # fp16
-        bnb_config = None
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    if model_type == "base":
-        # Загрузка базовой модели
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-
-        if bnb_config:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                quantization_config=bnb_config,
-                device_map="auto",
-                trust_remote_code=True,
-                torch_dtype=torch.float16
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                device_map="auto",
-                trust_remote_code=True,
-                torch_dtype=torch.float16
-            )
-
-    else:  # finetuned
-        # Загрузка дообученной модели с LoRA адаптерами
-        # Определяем базовую модель из папки дообученной модели
-        if os.path.exists(os.path.join(model_path, "adapter_config.json")):
-            # Читаем конфигурацию адаптера, чтобы узнать базовую модель
-            import json
-            with open(os.path.join(model_path, "adapter_config.json")) as f:
-                adapter_config = json.load(f)
-            base_model_name = adapter_config.get("base_model_name_or_path", "")
-
-            if not base_model_name:
-                # Пытаемся определить по названию папки
-                if "CodeLlama" in model_path:
-                    base_model_name = "codellama/CodeLlama-7b-Instruct-hf"
-                elif "Mistral" in model_path:
-                    base_model_name = "mistralai/Mistral-7B-Instruct-v0.2"
-                else:
-                    raise ValueError(f"Не удалось определить базовую модель для {model_path}")
-        else:
-            raise ValueError(f"Файл adapter_config.json не найден в {model_path}")
-
-        logger.info(f"Базовая модель для адаптера: {base_model_name}")
-
-        # Загружаем токенизатор
-        tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-
-        # Загружаем базовую модель
-        if bnb_config:
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name,
-                quantization_config=bnb_config,
-                device_map="auto",
-                trust_remote_code=True,
-                torch_dtype=torch.float16
-            )
-        else:
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name,
-                device_map="auto",
-                trust_remote_code=True,
-                torch_dtype=torch.float16
-            )
-
-        # Применяем LoRA адаптер
-        model = PeftModel.from_pretrained(base_model, model_path)
-
-    model.eval()
-    logger.info("Модель успешно загружена")
-    return model, tokenizer
-
-
-def generate_fix_and_sql(model, tokenizer, input_sql, max_new_tokens=512):
-    """
-    Генерирует исправленный SQL и описание исправления
-
-    Args:
-        model: Загруженная модель
-        tokenizer: Токенизатор
-        input_sql: Исходный SQL-запрос
-        max_new_tokens: Максимальное количество новых токенов
-
-    Returns:
-        tuple: (corrected_sql, fix_description)
-    """
-    device = next(model.parameters()).device
-
-    # Формируем промпт в том же формате, что использовался для обучения
-    prompt = (
-        "You are a strict SQL syntax corrector. You must:\n"
-        "1. Analyze the BAD_SQL query.\n"
-        "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
-        "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
-        "4. Describe how you fixed it in FIX or write \"The query does not need to be fixed.\" in FIX if query is correct.\n\n"
-        "IMPORTANT: Always return strictly the following format, without any extra text:\n\n"
-        f"BAD_SQL:\n{input_sql}\n"
-        "GOOD_SQL:\n"
-    )
-
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs, **GENERATION_CONFIG
-        )
-
-    # Декодируем ответ
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # Извлекаем ответ (убираем исходный промпт)
-    response = generated_text[len(prompt):].strip()
-
-    # Парсим ответ для извлечения SQL и описания исправления
-    corrected_sql = ""
-    fix_description = ""
-
-    lines = response.split('\n')
-    current_section = ""
-
-    for line in lines:
-        line = line.strip()
-        if line.startswith("REASON:"):
-            current_section = "reason"
-            continue
-        elif line.startswith("FIX:"):
-            current_section = "fix"
-            fix_description = line[4:].strip()
-            continue
-        elif line.startswith("GOOD_SQL:"):
-            current_section = "sql"
-            corrected_sql = line[9:].strip()
-            continue
-
-        # Добавляем содержимое к соответствующей секции
-        if current_section == "sql" and line:
-            if corrected_sql:
-                corrected_sql += " " + line
-            else:
-                corrected_sql = line
-        elif current_section == "fix" and line:
-            if fix_description:
-                fix_description += " " + line
-            else:
-                fix_description = line
-
-    # Если не удалось извлечь структурированный ответ, используем весь response как SQL
-    if not corrected_sql:
-        # Пытаемся найти SQL в начале ответа
-        lines = response.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith(('REASON:', 'FIX:', 'BAD_SQL:', 'GOOD_SQL:')):
-                corrected_sql = line
-                break
-
-        if not corrected_sql:
-            corrected_sql = response.split('\n')[0].strip()
-
-    if not fix_description:
-        fix_description = "No fix description provided"
-
-    return corrected_sql, fix_description
 
 
 def test_model(test_data_path, model_path, model_type="base", quantization="4bit"):
@@ -272,9 +102,14 @@ def test_model(test_data_path, model_path, model_type="base", quantization="4bit
     if missing_columns:
         raise ValueError(f"Отсутствуют обязательные столбцы: {missing_columns}")
 
-    # Загружаем модель
+    # Предварительно загружаем модель через model_manager для проверки
     try:
-        model, tokenizer = load_model(model_path, model_type, quantization)
+        model, tokenizer = load_model_and_tokenizer(model_path, quantization)
+        logger.info("Модель успешно загружена через model_manager")
+        # Очищаем память после проверки - model_manager будет загружать по необходимости
+        del model, tokenizer
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     except Exception as e:
         raise ValueError(f"Ошибка при загрузке модели: {str(e)}")
 
@@ -291,7 +126,12 @@ def test_model(test_data_path, model_path, model_type="base", quantization="4bit
             continue
 
         try:
-            predicted_sql, predicted_fix = parse_llm_response_with_retries(model, tokenizer, bad_sql)
+            # Используем функцию с повторными попытками через model_manager
+            predicted_sql, predicted_fix = parse_llm_response_with_retries(
+                model_name=model_path,
+                bad_sql=bad_sql,
+                quantization=quantization
+            )
 
             if not predicted_sql:
                 logger.warning(f"Отброшен невалидный ответ в строке {idx}")

@@ -12,12 +12,15 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from datasets import Dataset
+from model_manager import load_model_and_tokenizer
+from prompt_handler import build_training_prompt, build_training_target
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger("train_bnb_lora")
 BATCH_SIZE = 4
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 def load_dataset(xlsx_path):
     logger.info(f"Загрузка датасета из {xlsx_path}")
@@ -28,30 +31,14 @@ def load_dataset(xlsx_path):
             raise ValueError(f"Отсутствует обязательный столбец: {col}")
     df = df.dropna(subset=['BAD_SQL', 'GOOD_SQL'])
 
-    def build_prompt(row):
-        return (
-            "You are a strict SQL syntax corrector. You must:\n"
-    "1. Analyze the BAD_SQL query.\n"
-    "2. Return the corrected version or the same SQL-query if it is correct and optimized in GOOD_SQL.\n"
-    "3. Describe what was wrong in REASON or write \"nan\" in REASON if query is correct.\n"
-    "4. Describe how you fixed it in FIX or write \"The query does not need to be fixed.\" in FIX if query is correct.\n\n"
-    "IMPORTANT: Always return strictly the following format, without any extra text:\n\n"
-    f"BAD_SQL:\n{row}\n"
-    "GOOD_SQL:\n"
-        )
-
-    def build_target(row):
-        return (
-            f"GOOD_SQL:\n{row['GOOD_SQL']}\n"
-            f"REASON:\n{row['REASON']}\n"
-            f"FIX:\n{row['FIX']}"
-        )
-
-    df['input_text'] = df.apply(build_prompt, axis=1)
-    df['target_text'] = df.apply(build_target, axis=1)
+    # Используем функции из prompt_handler
+    df['input_text'] = df['BAD_SQL'].apply(build_training_prompt)
+    df['target_text'] = df.apply(lambda row: build_training_target(
+        row['GOOD_SQL'], row['REASON'], row['FIX']), axis=1)
 
     logger.info(f"Загружено {len(df)} примеров для обучения")
     return Dataset.from_pandas(df[['input_text', 'target_text']])
+
 
 def tokenize_function(examples, tokenizer, max_length=512):
     model_inputs = tokenizer(
@@ -105,20 +92,30 @@ def train_bnb_lora(
     logger.info(f"Выходная директория: {output_dir}")
 
     os.makedirs(output_dir, exist_ok=True)
-    tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=True, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    bnb_config = get_bnb_config(quantization_type)
-    logger.info("Загружаем базовую модель...")
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        torch_dtype=torch.float16
-    )
+    # Используем load_model_and_tokenizer из model_manager для консистентности
+    try:
+        model, tokenizer = load_model_and_tokenizer(base_model, quantization_type)
+        logger.info("Модель и токенизатор загружены через model_manager")
+    except Exception as e:
+        logger.warning(f"Не удалось загрузить через model_manager: {e}")
+        logger.info("Загружаем модель напрямую для обучения...")
+
+        # Fallback к прямой загрузке для обучения
+        tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=True, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        bnb_config = get_bnb_config(quantization_type)
+        logger.info("Загружаем базовую модель...")
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+            torch_dtype=torch.float16
+        )
 
     model = prepare_model_for_kbit_training(model)
     model.config.use_cache = False
@@ -198,17 +195,12 @@ def train_bnb_lora(
 
 
 def validate_model(model_path, test_prompt=None):
+    """Валидация модели через model_manager"""
     logger.info(f"Проверка модели из {model_path}")
     if test_prompt is None:
-        test_prompt = (
-            "You are a strict SQL syntax corrector. You must:\n"
-            "1. Analyze the BAD_SQL query.\n"
-            "2. Return the corrected version in GOOD_SQL.\n"
-            "3. Describe what was wrong in REASON.\n"
-            "4. Describe how you fixed it in FIX.\n\n"
-            "IMPORTANT: Always return the answer strictly in the following format, without any extra text:\n\n"
-            "BAD_SQL:\nSELECT * FROM users WHERE id = 1"
-        )
+        from prompt_handler import build_sql_correction_prompt
+        test_prompt = build_sql_correction_prompt("SELECT * FROM users WHERE id = 1")
+
     try:
         from model_manager import generate_llm_response
         response = generate_llm_response(
@@ -228,7 +220,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Дообучение LLM с использованием bitsandbytes и LoRA (Text-to-Text)")
     parser.add_argument("xlsx_path", help="Путь к xlsx файлу с данными для обучения")
-    parser.add_argument("--base_model", default="meta-llama/Llama-2-7b-hf", help="Название базовой модели на HuggingFace")
+    parser.add_argument("--base_model", default="meta-llama/Llama-2-7b-hf",
+                        help="Название базовой модели на HuggingFace")
     parser.add_argument("--output_dir", default="./bnb-lora-finetuned", help="Директория для сохранения результатов")
     parser.add_argument("--quantization_type", choices=["4bit", "8bit"], default="4bit", help="Тип квантования")
     parser.add_argument("--lora_r", type=int, default=16, help="Ранг LoRA")

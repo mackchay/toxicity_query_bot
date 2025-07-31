@@ -33,6 +33,8 @@ router = Router()
 # === ИМПОРТЫ ДЛЯ ОБУЧЕНИЯ И ТЕСТИРОВАНИЯ ===
 from train_llm import train_bnb_lora
 from test_llm import test_model
+from model_manager import generate_llm_response, get_available_models
+from prompt_handler import build_sql_correction_prompt, parse_model_response
 
 # Список HuggingFace моделей для дообучения (без GGUF)
 HF_FINETUNE_MODELS = [
@@ -54,7 +56,8 @@ def get_main_kb():
     kb = [[KeyboardButton(text=btn)] for btn in buttons]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-@router.message(lambda message: message.text == 'Исправить SQL-запрос')
+
+@router.message(lambda message: message.text == 'Исправить SQL-запросы')
 async def fix_sql_request(message: Message):
     """Обработка запроса на исправление SQL"""
     if not message.from_user:
@@ -67,6 +70,7 @@ async def fix_sql_request(message: Message):
         "Я постараюсь сделать его корректным и более эффективным."
     )
 
+
 @router.message(lambda message: get_user_state(message.from_user.id) == "fix_sql")
 async def handle_sql_fix_request(message: Message):
     """Получение и исправление SQL-запроса"""
@@ -75,25 +79,90 @@ async def handle_sql_fix_request(message: Message):
         return
 
     raw_sql = message.text
+    user_id = message.from_user.id
 
     await message.answer("Обрабатываю запрос...")
 
     try:
-        # Пример простого вызова модели или функции
-        # Здесь ты можешь вызвать свой LLM, локально или через API
-        # Ниже — заглушка
-        fixed_sql = "SELECT id, name FROM users WHERE active = TRUE;"  # замените на вызов LLM
+        # Получаем доступные модели
+        available_models = get_available_models()
 
-        await message.answer(
-            f"🔧 Исправленный SQL-запрос:\n```\n{fixed_sql}\n```",
-            parse_mode="Markdown"
-        )
+        # Выбираем модель (приоритет дообученным моделям)
+        if available_models["finetuned_models"]:
+            model_name = available_models["finetuned_models"][0]  # Берем первую дообученную модель
+            logger.info(f"Используем дообученную модель: {model_name}")
+        else:
+            model_name = "codellama/CodeLlama-7b-Instruct-hf"  # Базовая модель по умолчанию
+            logger.info(f"Используем базовую модель: {model_name}")
+
+        # Исправляем SQL через model_manager
+        corrected_sql, fix_description = await handle_sql_request(raw_sql, model_name)
+
+        if corrected_sql:
+            response_text = (
+                f"🔧 **Исправленный SQL-запрос:**\n"
+                f"```sql\n{corrected_sql}\n```\n\n"
+                f"📝 **Описание исправления:**\n{fix_description}"
+            )
+        else:
+            response_text = "❌ Не удалось обработать запрос. Попробуйте снова."
+
+        await message.answer(response_text, parse_mode="Markdown")
 
     except Exception as e:
+        logger.error(f"Ошибка при обработке SQL запроса: {str(e)}")
         await message.answer(f"Ошибка при обработке запроса: {str(e)}")
 
     set_user_state(message.from_user.id, STATE_MAIN)
     await message.answer("Возврат в главное меню.", reply_markup=get_main_kb())
+
+
+async def handle_sql_request(raw_sql: str, model_name: str = None, quantization: str = "4bit") -> tuple:
+    """
+    Обрабатывает SQL запрос через модель и возвращает исправленный SQL и описание исправления
+
+    Args:
+        raw_sql: Исходный SQL запрос
+        model_name: Название модели (если None, выбирается автоматически)
+        quantization: Тип квантования
+
+    Returns:
+        tuple: (corrected_sql, fix_description)
+    """
+    try:
+        # Если модель не указана, выбираем автоматически
+        if model_name is None:
+            available_models = get_available_models()
+            if available_models["finetuned_models"]:
+                model_name = available_models["finetuned_models"][0]
+            else:
+                model_name = "codellama/CodeLlama-7b-Instruct-hf"
+
+        # Строим промпт
+        prompt = build_sql_correction_prompt(raw_sql)
+
+        # Генерируем ответ через model_manager
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: generate_llm_response(
+                prompt=prompt,
+                model_name=model_name,
+                quantization=quantization,
+                max_new_tokens=512
+            )
+        )
+
+        # Парсим ответ
+        corrected_sql, fix_description = parse_model_response(response)
+
+        logger.info(f"SQL исправлен: {raw_sql[:50]}... -> {corrected_sql[:50]}...")
+
+        return corrected_sql, fix_description
+
+    except Exception as e:
+        logger.error(f"Ошибка в handle_sql_request: {str(e)}")
+        return None, f"Ошибка: {str(e)}"
 
 
 def get_finetune_model_kb():
